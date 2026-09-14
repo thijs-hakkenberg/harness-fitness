@@ -56,12 +56,14 @@ def comp(
     agents=(),
     profile=None,
     env_hash=None,
+    model_basis=None,
 ):
     """A composition record shaped the way `composition.build` returns one."""
     return {
         "schema": 1,
         "digest": digest,
         "env_hash": env_hash,
+        "model_basis": model_basis,
         "captured_at": "2026-09-14T12:00:00Z",
         "profile": profile or {},
         "plugins": [dict(p) for p in plugins],
@@ -387,6 +389,20 @@ class TestChanges:
         entry = state_store.read_jsonl(ledger.changes_path(proj, accepted))[0]
 
         assert entry["env_hash"] == "e" * 64
+
+    def test_the_transition_carries_the_model_basis_too(self, accepted, proj):
+        # An `env_hash` in a change entry answers "were these two comparable?" only
+        # if the basis it was resolved on is there beside it. Carrying the hash
+        # alone would let a reader of `changes.jsonl` conclude two sides were
+        # comparable when ADR-007 obliges a refusal.
+        ledger.record_composition(
+            proj,
+            comp("aaaaaaaaaaaa", env_hash="e" * 64, model_basis="declared"),
+            accepted,
+        )
+        entry = state_store.read_jsonl(ledger.changes_path(proj, accepted))[0]
+
+        assert entry["model_basis"] == "declared"
 
     def test_a_missing_previous_record_yields_a_null_diff_not_an_empty_one(
         self, accepted, proj

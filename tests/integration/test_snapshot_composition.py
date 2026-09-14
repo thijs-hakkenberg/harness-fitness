@@ -284,6 +284,42 @@ class TestTheEnvironmentPin:
         assert len(record["env_hash"]) == 64
         assert set(record["env_hash"]) <= set("0123456789abcdef")
 
+    def test_the_record_carries_the_model_basis_beside_the_hash(
+        self, run_hook, settings_tree, accepted
+    ):
+        # The hook resolves a whole pin and must not narrow it to the hash on the
+        # way to disk. ADR-007 obliges the comparison layer to refuse on a differing
+        # `model_basis`, and that obligation is unhonourable if the basis is
+        # discarded at write time — the refusal would have nothing to read.
+        #
+        # `declared` and not `observed`: nothing on this path consults an OTEL log,
+        # so a settings-resolved model is a declaration. Asserting the value rather
+        # than its presence is what makes a hook that hard-codes a basis fail here.
+        tree = settings_tree(
+            user=dict(ENABLED_ONE, env={"ANTHROPIC_MODEL": "claude-a"}),
+            plugins=ONE_PLUGIN,
+        )
+
+        run_hook(SCRIPT, payload(tree.project))
+
+        digest = ledger.current_digest(str(tree.project), accepted)
+        record = ledger.read_composition(str(tree.project), digest, accepted)
+        assert record["model_basis"] == "declared"
+
+    def test_an_unresolvable_model_records_an_unknown_basis_not_a_null_one(
+        self, run_hook, accepted, tmp_path
+    ):
+        # The distinction the storage layer has to preserve. On a machine with no
+        # settings at all the model cannot be resolved, and `"unknown"` says the
+        # hook looked; `None` would say nobody passed a pin. Only the first is
+        # comparable against another `unknown`.
+        result = run_hook(SCRIPT, payload(tmp_path))
+
+        assert result.returncode == 0
+        digest = ledger.current_digest(str(tmp_path), accepted)
+        record = ledger.read_composition(str(tmp_path), digest, accepted)
+        assert record["model_basis"] == "unknown"
+
     def test_the_transition_carries_the_same_env_hash(
         self, run_hook, settings_tree, accepted
     ):

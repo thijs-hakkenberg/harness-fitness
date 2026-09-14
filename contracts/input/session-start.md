@@ -101,6 +101,12 @@ there. Two properties of that write are visible from here:
   digest, appends nothing, and leaves the original pin in place. An episode must
   resolve its own `env_hash` at close time and must never read one off a composition
   record (ADR-007).
+- **Both halves of the pin are written, never just the hash.** `model_basis` travels
+  beside `env_hash` in the composition record and in the `changes.jsonl` entry,
+  because the comparison layer is obliged to refuse on a differing basis and cannot
+  do so from a field that was dropped at write time. Nothing on this path reads an
+  OTEL log, so the basis this hook records is `declared` at best and `unknown` where
+  no model resolves.
 - A blocked write degrades to *nothing recorded*, not to a swallowed traceback. Every
   dependency in the hook's body is total — `state_store` returns `False` and
   `hfit_time` falls back rather than raising — so `fail_open` is the last line of

@@ -356,6 +356,41 @@ class TestRecord:
         # able to refuse on a missing env_hash, and only null is unambiguous.
         assert composition.build(tree.home, tree.project)["env_hash"] is None
 
+    def test_the_model_basis_travels_beside_the_env_hash(self, settings_tree):
+        # ADR-007 obliges the comparison layer to refuse on a differing
+        # `model_basis` exactly as it refuses on a differing `env_hash`. That
+        # refusal is unhonourable from stored data unless the basis is stored, and
+        # a record carrying the hash without it presents the hash as more
+        # trustworthy than it is: two pins that hash alike are comparable only if
+        # they were resolved the same way.
+        tree = settings_tree(user=ENABLED_ONE, plugins=ONE_PLUGIN)
+        record = composition.build(
+            tree.home, tree.project, env_hash="e" * 64, model_basis="declared"
+        )
+
+        assert record["model_basis"] == "declared"
+
+    def test_an_unsupplied_model_basis_is_null_and_not_unknown(self, settings_tree):
+        # `"unknown"` is a real value `env_pin` returns: it means the pin resolved
+        # and the model could not be determined. `None` means no pin was supplied
+        # at all. Collapsing the two would let a caller that forgot to pass the
+        # basis look exactly like one that looked and found nothing — and only the
+        # second is comparable against another `unknown`.
+        tree = settings_tree(user=ENABLED_ONE, plugins=ONE_PLUGIN)
+
+        assert composition.build(tree.home, tree.project)["model_basis"] is None
+
+    def test_the_model_basis_does_not_move_the_digest(self, settings_tree):
+        # The same reason it is not folded into `env_hash` (ADR-007): a user who
+        # gains an OTEL log would otherwise re-key an unchanged harness, splitting
+        # one comparable population into two that each fall below
+        # `min_episodes_per_digest`.
+        tree = settings_tree(user=ENABLED_ONE, plugins=ONE_PLUGIN)
+
+        assert digest_for(tree, model_basis="declared") == digest_for(
+            tree, model_basis="observed"
+        )
+
     def test_the_profile_counts_every_component(self, settings_tree):
         tree = settings_tree(user=ENABLED_ONE, plugins=ONE_PLUGIN)
         record = composition.build(tree.home, tree.project)

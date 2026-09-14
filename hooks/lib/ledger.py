@@ -207,8 +207,11 @@ def _change(cwd, previous, record, cfg, now):
         "to": record["digest"],
         # Carried so a reader of `changes.jsonl` alone can tell whether the two
         # sides were comparable at all, without resolving both compositions
-        # (ADR-007).
+        # (ADR-007). The basis travels with the hash rather than behind it: a hash
+        # on its own answers the comparability question only if how it was resolved
+        # is visible beside it, and ADR-007 obliges a refusal on a differing basis.
         "env_hash": record.get("env_hash"),
+        "model_basis": record.get("model_basis"),
         "kind": "baseline" if previous is None else "transition",
     }
 

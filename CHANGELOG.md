@@ -130,6 +130,20 @@ contract file records its own history so a consumer can tell what it may rely on
 
 ### Fixed
 
+- `model_basis` was resolved at every session start and then discarded at write
+  time. `env_pin` returns it, [ADR-007](adr/) obliges the comparison layer to
+  refuse on a differing basis exactly as it refuses on a differing `env_hash`, and
+  `composition.build` accepted only the hash — so the obligation was unhonourable
+  from stored data. Found by designing the read surface rather than by a failing
+  test, which is the uncomfortable part: every test was green because every test
+  asserted the hash. A record carrying the hash without the basis is worse than one
+  carrying neither, because it presents that hash as sufficient for a comparability
+  decision it cannot support — two pins that hash alike are comparable only if they
+  were resolved the same way. Now threaded through `composition.build`,
+  `snapshot_composition.py` and `changes.jsonl`, with the `null`/`"unknown"`
+  distinction preserved verbatim: `"unknown"` means the resolver looked and found no
+  model, `null` means no pin was supplied, and only the first is comparable against
+  another `"unknown"`.
 - Six assertions in `test_env_pin.py` that compared two settings trees built
   before either was read. There is one `HOME` per test, so the second build
   overwrites the first — which made three "this moves" assertions fail as though

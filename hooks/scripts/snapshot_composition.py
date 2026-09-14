@@ -53,8 +53,20 @@ def main():
     # and a hook that measures latency should not spend two reads where one does.
     cfg = hfit_config.load()
 
+    # Both halves of the pin, never just the hash. ADR-007 obliges the comparison
+    # layer to refuse on a differing `model_basis` exactly as it refuses on a
+    # differing `env_hash`, and that refusal has nothing to read if the basis is
+    # dropped here. Nothing on this path consults an OTEL log, so the basis is
+    # `declared` at best and `unknown` where no model resolves — which is precisely
+    # why it must be recorded rather than assumed.
     pin = env_pin.build(home, cwd)
-    record = composition.build(home, cwd, cfg=cfg, env_hash=pin.get("env_hash"))
+    record = composition.build(
+        home,
+        cwd,
+        cfg=cfg,
+        env_hash=pin.get("env_hash"),
+        model_basis=pin.get("model_basis"),
+    )
     ledger.record_composition(cwd, record, cfg=cfg)
 
 

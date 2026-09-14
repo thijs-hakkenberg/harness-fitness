@@ -282,7 +282,7 @@ def flags(inv):
     return found
 
 
-def build(home, project_root, cfg=None, env_hash=None, now=None):
+def build(home, project_root, cfg=None, env_hash=None, model_basis=None, now=None):
     """The full composition record, digest included.
 
     `cfg` is loaded once when omitted, so `ff_hook_events` is read a single time
@@ -293,6 +293,18 @@ def build(home, project_root, cfg=None, env_hash=None, now=None):
     `env_hash` is carried, never folded in, and stays `None` when absent: a
     consumer comparing two compositions must be able to refuse on a missing
     `env_hash`, and only `null` is unambiguous.
+
+    `model_basis` is carried on exactly the same terms and for a reason ADR-007
+    makes explicit: the comparison layer is obliged to refuse on a differing basis
+    just as it refuses on a differing hash, and it cannot honour that from stored
+    data unless the basis is stored. Two pins that hash alike are comparable only
+    if they were resolved the same way, so a record carrying the hash without the
+    basis presents that hash as more trustworthy than it is.
+
+    The `None`/`"unknown"` distinction is load-bearing and preserved verbatim:
+    `env_pin` returns `"unknown"` when it looked and could not resolve a model,
+    while `None` here means no pin was supplied at all. Only the first is
+    comparable against another `"unknown"`.
     """
     if cfg is None:
         cfg = hfit_config.load()
@@ -304,6 +316,9 @@ def build(home, project_root, cfg=None, env_hash=None, now=None):
         "schema": SCHEMA,
         "digest": digest(canonical(inv)),
         "env_hash": env_hash if env_hash else None,
+        # Not `if model_basis else None` — an empty string is a caller bug and
+        # should be visible as one, where an absent pin is a legitimate state.
+        "model_basis": model_basis,
         "captured_at": hfit_time.iso(now),
         "profile": taxonomy.profile(components(inv), ff_events=ff_events),
         "plugins": [dict(p) for p in inv["plugins"]],

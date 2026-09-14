@@ -145,6 +145,41 @@ versions (`claude_code_version`, `agent_sdk_version`) *are* hashed, because a
 Claude Code upgrade changes what a fixed configuration does — the rig folds its
 probed versions in for the same reason.
 
+**A composition record's `env_hash` is first-sighting provenance, not the pin an
+episode ran under.** Composition files are content-addressed and written once —
+never rewritten, because episodes reference a digest by name and rewriting one
+would retroactively change what they say they ran under. So a later session under
+a different model produces the *same* digest, appends nothing, and leaves the
+original pin in place. That is correct: the harness did not move. But it means the
+stored `env_hash` is the pin in force the first time this harness was seen, and
+nothing more.
+
+The consequence is a rule with teeth: **an episode must resolve its own `env_hash`
+at close time and must never read one off a composition record.** Reading it off
+the record would make every episode of a long-lived harness claim the environment
+of its first session, and step 3's grouping by `(composition_digest, env_hash)`
+would then compare across a model swap while reporting the pair as matched — the
+exact failure this ADR exists to prevent, arriving through the store rather than
+through the hash. Asserted by
+`test_a_changed_environment_moves_nothing_in_the_ledger`, which is written as a
+hazard rather than a feature.
+
+**The obligation above is unhonourable unless `model_basis` is stored, so it is.**
+Keeping the basis out of the hash (see above) leaves the comparison layer obliged
+to refuse on a differing basis, and a refusal cannot be honoured from data that was
+discarded at write time. `composition.build` therefore takes `model_basis` beside
+`env_hash` and stores it, `snapshot_composition.py` passes both halves of the pin
+rather than narrowing it to the hash, and `changes.jsonl` carries the basis beside
+the hash so a reader of the log alone can tell whether two sides were comparable
+without resolving either composition file.
+
+A record carrying the hash without the basis is worse than one carrying neither: it
+presents the hash as sufficient for a comparability decision it cannot support,
+since two pins that hash alike are comparable only if they were resolved the same
+way. The `None`/`"unknown"` distinction survives the write intact — `"unknown"`
+means the resolver looked and found no model, `null` means no pin was supplied at
+all, and only the first is comparable against another `"unknown"`.
+
 **Neither hash covers its own schema version.** `composition.SCHEMA` and
 `env_pin.SCHEMA` track record shape and are excluded, so a schema bump cannot
 re-digest an unchanged harness. `env_pin`'s `_HASH_BASIS` constant *is* hashed,
