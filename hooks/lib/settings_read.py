@@ -39,13 +39,6 @@ SCOPES = ("user", "user_local", "project", "project_local")
 # passed through as a sentinel for the caller that holds both.
 ALL_MCPJSON = ("*",)
 
-_FILENAMES = {
-    "user": ("settings.json",),
-    "user_local": ("settings.local.json",),
-    "project": ("settings.json",),
-    "project_local": ("settings.local.json",),
-}
-
 
 def layer_paths(home, project_root):
     """The four settings paths, ascending precedence, project scopes last.
@@ -144,27 +137,43 @@ def settings_hooks(layers):
     """
     records = []
     for scope, data in layers:
-        hooks = data.get("hooks")
-        if not isinstance(hooks, dict):
-            continue
-        for event, groups in hooks.items():
-            if not isinstance(groups, list):
-                continue
-            for group in groups:
-                if not isinstance(group, dict):
-                    continue
-                entries = group.get("hooks")
-                if not isinstance(entries, list):
-                    continue
-                matcher = group.get("matcher")
-                for entry in entries:
-                    record = _hook_record(scope, event, matcher, entry)
-                    if record is not None:
-                        records.append(record)
+        records.extend(hook_entries(data.get("hooks"), scope))
     return tuple(records)
 
 
-def _hook_record(scope, event, matcher, entry):
+def hook_entries(hooks_block, scope, owner=None):
+    """Parse one `hooks` block into records, skipping anything malformed.
+
+    Shared with `plugin_scan`, because a plugin's `hooks/hooks.json` uses this
+    exact shape. One implementation means the command reduction of ADR-010
+    happens in one place and cannot be forgotten at a second call site.
+
+    `scope` says which layer or install the block came from; `owner` names the
+    plugin that declared it, and is `None` for a settings-level hook that belongs
+    to no plugin.
+    """
+    if not isinstance(hooks_block, dict):
+        return ()
+
+    records = []
+    for event, groups in hooks_block.items():
+        if not isinstance(groups, list):
+            continue
+        for group in groups:
+            if not isinstance(group, dict):
+                continue
+            entries = group.get("hooks")
+            if not isinstance(entries, list):
+                continue
+            matcher = group.get("matcher")
+            for entry in entries:
+                record = _hook_record(scope, owner, event, matcher, entry)
+                if record is not None:
+                    records.append(record)
+    return tuple(records)
+
+
+def _hook_record(scope, owner, event, matcher, entry):
     if not isinstance(entry, dict):
         return None
     command = entry.get("command")
@@ -173,6 +182,7 @@ def _hook_record(scope, event, matcher, entry):
 
     record = {
         "scope": scope,
+        "owner": owner,
         "event": event,
         # None and "" are different reaches: no matcher fires on every tool, an
         # empty matcher fires on none. Collapsing them would misreport a sensor.

@@ -39,6 +39,19 @@ contract file records its own history so a consumer can tell what it may rely on
   interactive `/hfit:outcome --infer`, and exists to backfill issues closed
   before the `accepted:` habit — not to supply the priority-1 measure with a
   denominator.
+- Composition inventory, first two modules: `settings_read` (the four settings
+  layers, with the three merge rules Claude Code actually uses — mappings merge
+  key-wise, hooks accumulate, lists replace — each asserted separately because
+  getting one backwards would under-report the harness) and `plugin_scan` (what
+  each *enabled* plugin contributes, read from its directory rather than trusted
+  from its manifest).
+- [ADR-001](adr/001-the-content-digest-hashes-content-not-mtimes.md): a plugin
+  with no `gitCommitSha` falls back to a digest over file *content*, including
+  the hook scripts its `hooks.json` names. Hashing mtimes instead would have
+  reported a composition change on every fresh clone, splitting one measurable
+  population of episodes into two that each fall below `insufficient_n`; hashing
+  declarations alone would have left this plugin's own digest fixed across its
+  entire build.
 - [ADR-003](adr/003-project-slug-is-character-wise-and-resolved-on-disk.md):
   the project slug is character-wise and the transcript directory is resolved
   against the filesystem, because whether Claude Code collapses runs of
