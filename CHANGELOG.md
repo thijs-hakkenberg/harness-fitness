@@ -11,6 +11,24 @@ contract file records its own history so a consumer can tell what it may rely on
 
 ## [Unreleased]
 
+## [0.1.0] — 2026-09-14
+
+First public release. It answers one of the two questions in the brief — **what is
+this project's harness composed of, and when did it change?** — and refuses, in
+writing, to answer the other one yet.
+
+The primitive is the `composition_digest`: a canonicalised inventory of the
+*enabled* harness, tagged with the feedforward/feedback × computational/inferential
+taxonomy, sitting beside the environment pin. Nothing before this could group
+episodes by what the harness actually was — composition leaked out only as token
+attribution, and only for components that spent tokens, so a configured-but-unused
+hook, skill or MCP server was invisible. With a digest, a composition change becomes
+an identity you can diff and correlate rather than a thing you remember making.
+
+The measures are deliberately absent, reported as `null` beside a gap that says so.
+An estimate here would be indistinguishable from a measurement, and this is a tool
+whose only value is that its numbers can be trusted.
+
 ### Added
 
 - Repository skeleton: MIT licence, plugin and marketplace manifests, coverage
@@ -128,8 +146,70 @@ contract file records its own history so a consumer can tell what it may rely on
   *nothing recorded* rather than to a swallowed traceback. The second is asserted
   under `HFIT_DEBUG=1`, which would surface a swallowed exception if one existed.
 
+- `fitness.py --json`: the one read surface, and the only thing a skill parses.
+  Two properties are the contract rather than the implementation. **A failed read
+  carries no result keys at all** — not `measures: {}`, not `measures: null`, not
+  `episodes_seen: 0`, absent — because `null` is already spoken for: at this
+  version it is the *legitimate* value of a successful read, so a failed read
+  saying `null` would be indistinguishable from a successful one and a skill would
+  report "no measures available" where the honest answer is "consent was never
+  given". And **unknown is never zero**: every field that cannot be computed is
+  `null` beside a `gaps[]` entry written in a sentence a person can act on, since
+  `episodes_seen: 0` is a claim about the user's work rather than about the
+  plugin's completeness. The surface also **writes nothing**, which is a
+  measurement property and not tidiness — a reporting command that creates state
+  has changed the thing it reports on, and before consent it would be creating
+  that state in defiance of [ADR-014](adr/). It does not read stdin, because under
+  a skill stdin is a pipe that is never closed and a surface that reads it hangs
+  the session; the tests close stdin rather than feeding it, so a regression there
+  fails here.
+- `contracts/output/fitness-report.md` and `contracts/output/composition-record.md`:
+  the exact key set of a successful read and of a refused one, stated as ten keys
+  and six rather than as a shape to infer. Written because the difference between
+  them is the whole discipline — a consumer that cannot tell "absent" from "null"
+  from "zero" has no way to be honest — and because the first-sighting semantics of
+  a composition file's `env_hash` are invisible from the file itself.
+- `/hfit:composition`, the first skill: what the harness in this project is made
+  of, and when it last changed. Bound to the CLI's own `GAP_KINDS` tuple by
+  `test_skills.py`, which requires an instruction for every kind the CLI can emit.
+  That failure is the one worth a test, because nothing breaks when it happens: the
+  model meets an unfamiliar `kind`, writes a plausible sentence about it, and the
+  user reads an invented explanation from a tool whose entire purpose is to not
+  invent. The suite extracts the fenced command blocks and **runs them**, since a
+  skill's documented command is an execution path nothing else drives — every other
+  test invokes the CLI by its own argv rather than by the string a session will
+  execute.
+- `acknowledge.py` and `contracts/output/consent-notice.md`: the only surface that
+  can open or close the write gate, and until now it did not exist while three
+  places already named it. `--accept` / `--show` / `--revoke` in a *required*
+  group, so a bare invocation exits non-zero rather than agreeing to something — a
+  script whose default action is "accept" has collected a keystroke, not a
+  decision. `--show` writes nothing at all, asserted on the state root's
+  *existence* rather than on a file listing, because a `makedirs` on the way to a
+  read leaves a directory no file listing can see. The notice names the ledger
+  root, says what is never written and that nothing leaves the machine
+  ([ADR-011](adr/)), and names the governing keys that would re-ask — bound to
+  `hfit_config.governing()`, because a user re-prompted after editing a config
+  file who cannot tell a deliberate re-ask from a bug will stop using the plugin.
+
 ### Fixed
 
+- Two consent-gate assertions proved "nothing was written" from a file listing,
+  which cannot see a leaked `mkdir`. Where the claim is that nothing exists before
+  consent, the assertion is now on `os.path.exists`; where it is that nothing *new*
+  appeared, `entries_under` counts directories too. `files_under` keeps its
+  file-only semantics deliberately, and its docstring now says it cannot carry a
+  "wrote nothing" claim alone — an empty directory under someone's `HOME` is a
+  trace, and a promise that nothing is recorded before consent has to be provable
+  against the filesystem rather than against a return value.
+- `test_skills.py` asserted a *vocabulary* rather than an instruction. Its check
+  that a skill forbids inventing a number was `"null" in text` plus `"never" in
+  text` — and every skill here says "never" about half a dozen other things, so it
+  passed for a document containing no such prohibition at all, and kept passing
+  when `Never fill in a null` was flipped to `Always`. Found by mutation, not by
+  the suite. The assertion is now on a negated verb *of fabrication* co-located on
+  one line, which is as close to the real property as a lexical test can get, and
+  unlike the original it fails when the instruction is deleted.
 - `model_basis` was resolved at every session start and then discarded at write
   time. `env_pin` returns it, [ADR-007](adr/) obliges the comparison layer to
   refuse on a differing basis exactly as it refuses on a differing `env_hash`, and
@@ -152,4 +232,5 @@ contract file records its own history so a consumer can tell what it may rely on
   spurious movement are vacuous has no guards at all. The fixture's docstring now
   records the trap, since every later module compares two trees the same way.
 
-[Unreleased]: https://github.com/thijs-hakkenberg/harness-fitness/commits/main
+[Unreleased]: https://github.com/thijs-hakkenberg/harness-fitness/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/thijs-hakkenberg/harness-fitness/releases/tag/v0.1.0
