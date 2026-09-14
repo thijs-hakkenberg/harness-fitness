@@ -96,6 +96,19 @@ contract file records its own history so a consumer can tell what it may rely on
   `model_basis` therefore has to travel *beside* the hash rather than inside it,
   leaving the comparison layer obliged to refuse on a mixed basis.
 
+- `ledger`: where a composition becomes history — a content-addressed file per
+  composition ever seen, plus an append-only log of the moments the identity
+  moved, carrying `added`/`removed`/`changed` and the `profile_delta`. Three
+  properties are load-bearing and each names the reader it protects: a composition
+  file is **written once and never rewritten**, because episodes reference a digest
+  by name and re-writing it would retroactively change what they say they ran
+  under; a transition is appended **only when the digest moves**, because this runs
+  on every `SessionStart` and a record per invocation would make `changes.jsonl` a
+  session log whose duplicates are indistinguishable from real re-entries; and when
+  the previous composition is unreadable every diff field is `null` rather than
+  `[]`, because an empty list asserts the digest moved while nothing about the
+  harness did — which cannot happen. Unknown is never zero.
+
 ### Fixed
 
 - Six assertions in `test_env_pin.py` that compared two settings trees built
