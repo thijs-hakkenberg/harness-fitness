@@ -524,11 +524,77 @@ def run_hook():
     return _run
 
 
+@pytest.fixture
+def run_cli():
+    """Run a CLI script as a real subprocess with argv and a closed stdin.
+
+    Separate from ``run_hook`` for two reasons that are both about what the test
+    is allowed to prove. A CLI is driven by *argv*, which ``run_hook`` has no way
+    to pass; and stdin is closed rather than fed, because a read surface that
+    blocks waiting for input hangs a session — and a fixture that supplies stdin
+    would make that bug invisible here and fatal in a skill.
+    """
+    import subprocess
+
+    def _run(script, args=(), env=None, cwd=None, timeout=60):
+        path = HOOKS_SCRIPTS / script
+        proc_env = dict(os.environ)
+        proc_env["CLAUDE_PLUGIN_ROOT"] = str(REPO_ROOT)
+        proc_env["PYTHONDONTWRITEBYTECODE"] = "1"
+        if env:
+            proc_env.update({k: str(v) for k, v in env.items()})
+        return subprocess.run(
+            [sys.executable, str(path)] + [str(a) for a in args],
+            input="",
+            env=proc_env,
+            cwd=str(cwd) if cwd else None,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+
+    return _run
+
+
 def files_under(root):
-    """Every file below `root`, as a sorted list of relative posix paths."""
+    """Every file below `root`, as a sorted list of relative posix paths.
+
+    **This cannot see a leaked `mkdir`, and no "wrote nothing" assertion should be
+    built on it alone.** An empty directory is not a file, so it appears in neither
+    a before nor an after listing, and `files_under(x) == []` still holds after
+    `os.makedirs(x)`. Found by mutation: inserting a `makedirs` of the ledger root
+    into the read-only `fitness.py` left all 22 of its tests green, including the one
+    whose comment named "a read surface is the easiest place to leak a `mkdir`
+    (ADR-014)" as the thing it was guarding.
+
+    Use `entries_under` to compare a tree across a call, or assert the path does not
+    exist at all where the claim is that nothing was written before consent — which
+    is the stronger and more faithful reading of ADR-014's "leaves no trace".
+
+    It stays file-only because that is right for its other use, comparing what a
+    *writer* produced: a listing that included directories would make every
+    `written(...) == before` assertion sensitive to intermediate directories the
+    writer legitimately creates on the way to a file.
+    """
     root = Path(root)
     if not root.exists():
         return []
     return sorted(
         str(p.relative_to(root).as_posix()) for p in root.rglob("*") if p.is_file()
+    )
+
+
+def entries_under(root):
+    """Every path below `root` — directories included — sorted, relative, posix.
+
+    The companion `files_under` cannot have: directories are marked with a trailing
+    slash so a listing distinguishes an empty directory from a file of the same
+    name, and so a diff of two listings reads legibly when it fails.
+    """
+    root = Path(root)
+    if not root.exists():
+        return []
+    return sorted(
+        str(p.relative_to(root).as_posix()) + ("/" if p.is_dir() else "")
+        for p in root.rglob("*")
     )
