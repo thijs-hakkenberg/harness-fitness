@@ -68,6 +68,35 @@ class TestShowingBeforeAccepting:
         assert state_store.state_root() in result.stdout
         assert "harness-fitness" in result.stdout
 
+    def test_it_says_nothing_leaves_the_machine(self, run_cli):
+        # The one sentence that decides whether a measurement tool is adoptable or
+        # creepy, and the one a reader will look for first. A notice that lists what
+        # is collected without saying where it goes has answered the smaller half of
+        # the question (ADR-011).
+        result = run_cli(SCRIPT, ["--show"]).stdout.lower()
+
+        assert "no upload" in result or "nowhere" in result
+        assert "telemetry" in result
+
+    def test_it_says_what_is_never_recorded(self, run_cli):
+        # Consent to a list of things collected is not consent unless the exclusions
+        # are stated too. Command strings are hashed (ADR-010) and the `env` block is
+        # never opened — a user who has to read the source to learn that was not asked.
+        result = run_cli(SCRIPT, ["--show"]).stdout.lower()
+
+        assert "credential" in result or "token" in result
+        assert "prompt" in result
+
+    def test_it_names_the_keys_that_would_re_ask(self, run_cli, cfg):
+        # Bound to the config module's own declaration, so adding a governing key
+        # without naming it in the notice fails here. Otherwise a user re-prompted
+        # after editing a config file cannot tell a deliberate re-ask from a bug, and
+        # the obvious remedy is to stop using the plugin.
+        result = run_cli(SCRIPT, ["--show"])
+
+        missing = [k for k in hfit_config.governing(cfg) if k not in result.stdout]
+        assert missing == [], "governing keys the notice does not name: %s" % missing
+
 
 class TestAccepting:
     def test_it_records_consent_and_nothing_else(self, run_cli, cfg):
