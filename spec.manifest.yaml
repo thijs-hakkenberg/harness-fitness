@@ -1,0 +1,82 @@
+# spec.manifest.yaml — EA graph node declaration
+#
+# One node in an enterprise-architecture graph: what this repo is, which artefacts
+# describe it, and which interfaces it offers. `artefacts:` keeps the British
+# spelling throughout; `tests/unit/test_spec_conformance.py` asserts on that key by
+# name, so the two cannot drift apart.
+#
+# Two rules this file lives under, both enforced by that test rather than by
+# review. Every interface names the script that implements it and cites the
+# contract that specifies it, so a rename fails a test instead of leaving a
+# manifest that reads as verified. And every inbound interface carries an
+# `event:` naming its hook event, whose `latency_p99_ms` must repeat the timeout in
+# `hooks/hooks.json` — a timeout is the worst-case latency promise, and nothing but
+# that assertion keeps the two numbers together. The `event:` key exists so the
+# binding is a field rather than a phrase inside the prose: wiring a hook without
+# declaring it here fails, and so does declaring one that is not wired.
+#
+# This is the 0.1.0 surface: composition inventory only. Three pillars are declared
+# and empty, and the manifest grows an interface per step of the build order.
+
+name: "harness-fitness"
+description: "Measures what a Claude Code harness is composed of, and how well it performs, per project — so that adding or updating a plugin produces a readable before/after rather than an impression."
+type: application
+ea_layer: application
+owner: "Thijs Hakkenberg"
+status: active
+
+business_capability: "Harness Fitness Measurement & Composition Attribution"
+
+artefacts:
+  adrs: adr/
+  adr_analyses: adr/analysis/
+  features: features/
+  contexts: contexts/
+  contracts: contracts/
+
+interfaces:
+  inbound:
+    - name: "session-start-composition-snapshot"
+      protocol: event
+      event: SessionStart
+      schema: "contracts/input/session-start.md — hooks/scripts/snapshot_composition.py; reads the harness off disk, writes contracts/output/composition-record.md at compositions/<digest12>.json when the digest is new, and appends the transition to changes.jsonl. Emits no response field at all: no additionalContext, no permission decision, empty stdout, exit 0 — see adr/006. The 15 s budget is a ceiling for eight disk reads on a cold page cache, not an expectation."
+      sla:
+        latency_p99_ms: 15000
+        availability_pct: 99.0
+  outbound:
+    - name: "composition-record"
+      protocol: file
+      schema: "contracts/output/composition-record.md — compositions/<digest12>.json under the state root, content-addressed and never rewritten, so a digest quoted in an old report stays resolvable. Carries the FF/FB x COMP/INF profile and the env_hash beside the composition digest; see adr/007. Hook and MCP command strings arrive already reduced to cmd_basename + cmd_digest, per adr/010."
+      sla:
+        latency_p99_ms: 15000
+        availability_pct: 99.0
+    - name: "composition-change-log"
+      protocol: file
+      schema: "contracts/output/composition-record.md — changes.jsonl, append-only and appended to only on movement: one line per digest transition, with added/removed/changed and the profile_delta that makes the workshop's steering-event count a computed number rather than a hand tally."
+      sla:
+        latency_p99_ms: 15000
+        availability_pct: 99.0
+    - name: "fitness-report"
+      protocol: cli
+      schema: "contracts/output/fitness-report.md — hooks/scripts/fitness.py --json; invoked by /hfit:composition and by a human, never by an event. Reports `ok` before anything else, and on a failed read carries no measures, episodes_seen, current, changes or flags key at all — absence is the only encoding that cannot be mistaken for a result, since null is already the legitimate value of a successful read. Does not read stdin and creates nothing, so reporting on an unacknowledged install cannot be the thing that produces the first artefact; see adr/014."
+      sla:
+        latency_p99_ms: 20000
+        availability_pct: 95.0
+    - name: "consent-record"
+      protocol: cli
+      schema: "contracts/output/consent-notice.md — hooks/scripts/acknowledge.py --accept | --show | --revoke, mutually exclusive and required, so a bare invocation exits non-zero from argparse rather than defaulting to the agreeable branch. Writes acknowledged.json holding a fingerprint of the five governing config keys; until it matches, nothing anywhere is written and no path is resolved. --show reports what would be written and writes nothing to say so. See adr/014."
+      sla:
+        latency_p99_ms: 5000
+        availability_pct: 99.0
+
+dependencies:
+  - name: "Claude Code hook lifecycle (SessionStart) — the only trigger at 0.1.0, and the plugin never claims an event whose response can stop a tool call"
+    contract: "adr/004-there-is-no-pretooluse-hook.md"
+  - name: "Claude Code settings and plugin state on disk (settings{,.local}.json, installed_plugins.json, known_marketplaces.json, .mcp.json) — read-only, and the identity authority for every component, because OTEL anonymises local plugins to third-party"
+    contract: "contracts/output/composition-record.md"
+  - name: "The workshop rig's environment pin — the same five fields (model, effort, base URL, cache policy, max retries), so the continuous instrument and the controlled benchmark refuse to compare across the same boundary"
+    contract: "adr/007-the-composition-digest-sits-beside-the-env-hash.md"
+  - name: "Local filesystem under $HFIT_STATE_DIR (default ~/.claude/harness-fitness/) — every artefact is a local file the user can read, diff and delete; there is no endpoint, no upload and no telemetry of its own"
+    contract: "adr/011-claude-code-is-the-only-permitted-llm.md"
+  - name: "Python 3.9 standard library, and nothing else — a dependency is a component, and a plugin that makes the user install a package has changed the environment it exists to measure"
+    contract: "adr/006-the-hot-path-is-computational-only.md"

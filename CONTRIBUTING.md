@@ -40,7 +40,13 @@ HFIT_REAL_BD_TESTS=1 python3 -m pytest   # also the real-`bd` falsifiers
 CI runs the suite on Python 3.9 and 3.12. The 3.9 leg is what keeps the
 stdlib-only floor honest: hook code may import nothing that is not in the
 standard library of Python 3.9, because that is what ships on a stock macOS.
-Test code may use `pytest`, `pytest-bdd` and `coverage`; hook code may not.
+Test code may use `pytest`, `pytest-bdd`, `coverage` and `pyyaml`; hook code may
+not. `pyyaml` is there for one reader — `tests/unit/test_spec_conformance.py`
+parses `spec.manifest.yaml` — and the import lives inside a fixture rather than at
+module scope, so a missing PyYAML skips the manifest tests and leaves the
+dangling-ADR-reference guard running. An always-running test asserts the CI
+workflow installs it, because a guard that silently disables itself in CI is worth
+nothing there.
 
 ## Commit messages
 

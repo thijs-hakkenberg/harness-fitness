@@ -1,0 +1,4 @@
+# This directory is a declared artefact pillar in spec.manifest.yaml and is empty
+# at 0.1.0. The placeholder exists so the directory survives a clone: git does not
+# track empty directories, and test_spec_conformance.py asserts every declared
+# pillar is a directory. Delete this file when the pillar is populated.

@@ -222,8 +222,13 @@ misuse it is built to prevent:
 ## Development
 
 ```bash
+python3 -m pip install pytest pytest-bdd coverage pyyaml
 python3 -m pytest
 ```
+
+Those four are the whole test-time dependency set; the plugin itself imports only
+the Python 3.9 standard library. Without `pyyaml` the suite still runs — the
+`spec.manifest.yaml` checks skip and everything else reports.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Two rules: tests before implementation,
 and never write outside the `hfit_*` namespace.
