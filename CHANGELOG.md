@@ -109,6 +109,25 @@ contract file records its own history so a consumer can tell what it may rely on
   `[]`, because an empty list asserts the digest moved while nothing about the
   harness did — which cannot happen. Unknown is never zero.
 
+- `snapshot_composition.py`: the `SessionStart` hook, and the only writer of
+  `compositions/` and `changes.jsonl`. **It emits no `additionalContext`** — a
+  `SessionStart` response may inject text into every session's context window, and
+  a tool whose purpose is to measure what the harness costs must not become a line
+  item in that cost ([ADR-006](adr/)). Everything it learns goes to a file, read on
+  demand. Driven as a real subprocess in every test, because an in-process call
+  cannot catch the three failures that make a hook indistinguishable from a plugin
+  that does nothing: an import error, a stdout-protocol violation, a non-zero exit.
+  Two findings worth more than the code: the composition file's `env_hash` is
+  **first-sighting provenance only** — the file is content-addressed and never
+  rewritten, so a later session under a different model moves nothing and the stored
+  pin keeps its original value, which means an episode must resolve its own
+  `env_hash` at close time and must never read one off a composition record
+  ([ADR-007](adr/)); and the library beneath this hook is **total** — `state_store`
+  returns `False` and `hfit_time` falls back rather than raising — so `fail_open` is
+  a last line of defence here and not the mechanism, and a blocked write degrades to
+  *nothing recorded* rather than to a swallowed traceback. The second is asserted
+  under `HFIT_DEBUG=1`, which would surface a swallowed exception if one existed.
+
 ### Fixed
 
 - Six assertions in `test_env_pin.py` that compared two settings trees built
