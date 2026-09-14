@@ -45,6 +45,19 @@ contract file records its own history so a consumer can tell what it may rely on
   getting one backwards would under-report the harness) and `plugin_scan` (what
   each *enabled* plugin contributes, read from its directory rather than trusted
   from its manifest).
+- `taxonomy`: the FF/FB × COMP/INF classification, transcribed from the workshop
+  component table and deterministic — no model is consulted, because a profile
+  whose counts depended on an LLM's opinion of what a hook is would not
+  reproduce. Rolls up to a `composition_profile` and a `profile_delta`, so a
+  report can say "B added two FB·COMP sensors and removed one FF·INF guide"
+  rather than printing two inventories side by side.
+- [ADR-005](adr/005-a-pretooluse-block-is-a-feedforward-catch.md): `PreToolUse`
+  and `PermissionRequest` blocks count as *feedforward* catches, against the
+  source table. A deny happens before the action lands, so it prevents rather
+  than detects; classified as feedback, a harness whose only control is an edit
+  gate would report `feedforward_ratio = 0.0` — the opposite sign to the truth.
+  The event list lives in config so the judgement is reversible, and `classify`
+  reports `basis: "adr-005"` wherever its answer differs from the table.
 - [ADR-001](adr/001-the-content-digest-hashes-content-not-mtimes.md): a plugin
   with no `gitCommitSha` falls back to a digest over file *content*, including
   the hook scripts its `hooks.json` names. Hashing mtimes instead would have
