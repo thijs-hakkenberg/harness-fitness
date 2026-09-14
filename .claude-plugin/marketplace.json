@@ -10,7 +10,7 @@
     {
       "name": "harness-fitness",
       "source": "./",
-      "version": "0.1.0-dev",
+      "version": "0.1.0",
       "description": "Measures what your Claude Code harness is made of, and how well it performs",
       "license": "MIT",
       "category": "productivity",
