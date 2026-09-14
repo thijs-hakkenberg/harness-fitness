@@ -71,5 +71,39 @@ contract file records its own history so a consumer can tell what it may rely on
   separators is not determinable from any observable path. Guessing would have
   made a missing transcript directory read as a session with no human
   interventions, inflating autonomy.
+- `composition`: the `composition_digest` — the primitive every measure groups
+  by. Each field is either in the canonical form or excluded with the failure it
+  avoids named beside it, because the digest has to be wrong in neither
+  direction: missing a change merges two harnesses into one population and
+  reports the mixture as if it described one thing, while moving spuriously
+  splits ten episodes into two groups of five that each fall below
+  `min_episodes_per_digest`. The `env` block is never opened — not filtered,
+  never read — so no credential can reach a composition record even by accident.
+- `env_pin`: the environment side of that pair, pinning the same five fields the
+  rig pins so a signal found by this detector can be handed to the controlled
+  confirmer and mean the same thing.
+- [ADR-007](adr/007-the-composition-digest-sits-beside-the-env-hash.md): the
+  composition digest sits *beside* `env_hash`, never inside it, so a model swap
+  cannot read as a harness win — and a comparison across a differing `env_hash`
+  is refused rather than reported. Records three findings the code cannot state
+  on its own: the two hashes are deliberately different widths (12 is the
+  `compositions/<digest12>.json` filename contract, 64 is imposed by the rig's
+  result schema, and neither may be changed to match the other); **the model is
+  not declarable** — measured, with `settings.model` saying `opus`,
+  `env.ANTHROPIC_MODEL` saying something else entirely, and all 389 observed
+  `api_request` events reporting a third value, so a disk-resolved model is
+  marked `declared` and never presented as the model that ran; and that
+  `model_basis` therefore has to travel *beside* the hash rather than inside it,
+  leaving the comparison layer obliged to refuse on a mixed basis.
+
+### Fixed
+
+- Six assertions in `test_env_pin.py` that compared two settings trees built
+  before either was read. There is one `HOME` per test, so the second build
+  overwrites the first — which made three "this moves" assertions fail as though
+  the implementation were wrong, and, far worse, made three "this holds still"
+  assertions pass **without comparing anything**. A hash whose guards against
+  spurious movement are vacuous has no guards at all. The fixture's docstring now
+  records the trap, since every later module compares two trees the same way.
 
 [Unreleased]: https://github.com/thijs-hakkenberg/harness-fitness/commits/main

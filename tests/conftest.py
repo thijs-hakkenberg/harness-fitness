@@ -230,6 +230,29 @@ def settings_tree(isolated_home, tmp_path):
 
     Directories are created on disk, because the inventory reads them there
     rather than trusting the manifest.
+
+    **There is one HOME per test, so repeat calls overwrite rather than
+    accumulate.** A machine has one `~/.claude`, and the fixture models that
+    faithfully — but it means two `settings_tree()` calls in a single test do not
+    give you two trees to compare. Build a tree and read it before building the
+    next one::
+
+        # Right — build-then-read, twice, in one expression each.
+        assert digest_for(settings_tree(user=A)) != digest_for(settings_tree(user=B))
+
+        # Wrong — both reads see tree B.
+        a = settings_tree(user=A)
+        b = settings_tree(user=B)
+        assert digest_for(a) != digest_for(b)
+
+    The wrong form is dangerous in both directions. A "this moves" assertion fails
+    for a reason that looks like an implementation bug, which is merely annoying;
+    a "this holds still" assertion *passes without comparing anything*, which is
+    how a hash ends up with no guard at all against spurious movement. That
+    happened once, in `test_env_pin.py`, and was only caught because the failures
+    sat next to the vacuous passes. Python evaluates the operands of `!=`
+    left-to-right, so keeping each side a single build-and-read expression makes
+    the ordering correct by construction.
     """
 
     def _build(

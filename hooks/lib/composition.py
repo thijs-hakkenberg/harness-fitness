@@ -40,9 +40,13 @@ import taxonomy
 # episode population for a reason that is not a harness change.
 SCHEMA = 1
 
-# Twelve, matching the rig's `env_hash`, so neither identity reads as the more
-# precise one in a report. Also the filename of `compositions/<digest12>.json`,
-# which makes the width a storage contract rather than a display choice.
+# Twelve, and deliberately *not* the width of `env_hash`, which is a full 64
+# (`rig/schemas/result.schema.json` pins it to `^[0-9a-f]{64}$`, so a truncated one
+# fails `--rig-handoff`). The asymmetry looks like an inconsistency and is not:
+# twelve is the filename of `compositions/<digest12>.json`, which makes this width
+# a storage contract, while sixty-four is imposed by the handoff schema. Widening
+# this one to "match" would orphan every already-written composition file;
+# narrowing `env_hash` to match would break validation (ADR-007).
 DIGEST_LEN = 12
 
 
