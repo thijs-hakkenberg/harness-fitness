@@ -180,7 +180,10 @@ class TestTheConsentGate:
 
         assert result.returncode == 0
         assert result.stdout == ""
-        assert files_under(state_store.state_root()) == []
+        # Existence, not emptiness. `files_under` cannot see a directory created and
+        # left empty, so it would pass against a hook that resolved its ledger path
+        # with `makedirs` before checking consent — the exact leak this guards.
+        assert not os.path.exists(state_store.state_root())
 
     def test_a_changed_governing_config_stops_writing_again(
         self, run_hook, settings_tree, accepted, tmp_path

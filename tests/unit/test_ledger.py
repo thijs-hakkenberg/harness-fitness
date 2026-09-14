@@ -152,7 +152,10 @@ class TestTheConsentGate:
 
         assert result["ok"] is False
         assert result["reason"] == "not_acknowledged"
-        assert files_under(state_store.state_root()) == []
+        # Existence, not emptiness: an empty directory is a trace, and a listing of
+        # files cannot see one (see `files_under`'s docstring). "Leaves no trace" is
+        # what ADR-014 promises and what the README says.
+        assert not os.path.exists(state_store.state_root())
 
     def test_a_changed_governing_config_refuses_with_its_own_reason(self, accepted, proj):
         # A different remedy from `not_acknowledged`: the user consented to
@@ -499,7 +502,10 @@ class TestMalformedInput:
 
         assert result["ok"] is False
         assert result["reason"] == "no_digest"
-        assert files_under(ledger.root(proj, accepted)) == []
+        # The validation happens before any path is resolved as a directory, so the
+        # ledger root is not merely empty — it was never created. Asserted on the
+        # directory rather than on its file listing, which would pass either way.
+        assert not os.path.isdir(ledger.root(proj, accepted))
 
     def test_a_non_dict_record_is_refused(self, accepted, proj):
         result = ledger.record_composition(proj, "not a record", accepted)
