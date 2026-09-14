@@ -345,7 +345,7 @@ def _plugin_record(key, entry, marketplaces):
         "hooks": _plugin_hooks(key, entry, install_path) if on_disk else (),
         "skills": _skill_names(install_path) if on_disk else (),
         "agents": _agent_names(install_path) if on_disk else (),
-        "mcp_servers": _mcp_names(install_path) if on_disk else (),
+        "mcp_servers": mcp_names(install_path) if on_disk else (),
     }
     return record
 
@@ -404,8 +404,18 @@ def _agent_names(plugin_dir):
     )
 
 
-def _mcp_names(plugin_dir):
-    data = _read_json(os.path.join(_as_path(plugin_dir), _MCP_MANIFEST))
+def mcp_names(directory):
+    """Server names declared by a `.mcp.json` in `directory`, sorted.
+
+    Public and directory-agnostic because the same file shape appears in a plugin
+    and at a project root (source 6). One parser for both: the `mcpServers` /
+    `servers` fallback below is exactly the kind of detail that, copied to a
+    second call site, later disagrees with itself over which key wins.
+
+    Declaring a server is not enabling one — `enabledMcpjsonServers` decides that,
+    and the caller holds it.
+    """
+    data = _read_json(os.path.join(_as_path(directory), _MCP_MANIFEST))
     if not isinstance(data, dict):
         return ()
     servers = data.get("mcpServers")
