@@ -54,6 +54,31 @@ SCHEMA = 1
 # it does not know.
 _MANIFEST = os.path.join(os.path.dirname(_HOOKS), ".claude-plugin", "plugin.json")
 
+# Every gap kind this version can emit, named once and used at the call sites below
+# so the tuple and the calls cannot drift apart.
+#
+# The tuple exists for the skills. An undocumented kind does not fail anything: the
+# model meets an unfamiliar string, writes a plausible sentence about it, and the user
+# reads an invented explanation from a tool whose whole purpose is to not invent. So
+# `test_skills.py` requires every member to be named in every SKILL.md, and this is
+# what it binds to.
+#
+# Deliberately not enforced at runtime. A membership assertion in `_gap` would turn a
+# typo into a traceback on a read surface that is obliged to be total.
+_KIND_NOT_ACKNOWLEDGED = "not-acknowledged"
+_KIND_CONFIG_CHANGED = "config-changed"
+_KIND_NO_COMPOSITION = "no-composition-recorded"
+_KIND_UNRESOLVED = "unresolved-composition"
+_KIND_MEASURES = "measures-unavailable"
+
+GAP_KINDS = (
+    _KIND_NOT_ACKNOWLEDGED,
+    _KIND_CONFIG_CHANGED,
+    _KIND_NO_COMPOSITION,
+    _KIND_UNRESOLVED,
+    _KIND_MEASURES,
+)
+
 _NOT_ACKNOWLEDGED = (
     "Nothing has been recorded yet: this install has not been acknowledged. Run "
     "`python3 \"$CLAUDE_PLUGIN_ROOT/hooks/scripts/acknowledge.py\" --accept` to "
@@ -143,7 +168,7 @@ def _current(cwd, cfg, gaps):
     """The composition in force, or `None`, appending the gap that explains it."""
     digest = ledger.current_digest(cwd, cfg)
     if not digest:
-        gaps.append(_gap("no-composition-recorded", _NO_COMPOSITION))
+        gaps.append(_gap(_KIND_NO_COMPOSITION, _NO_COMPOSITION))
         return None
 
     record = ledger.read_composition(cwd, digest, cfg)
@@ -152,7 +177,7 @@ def _current(cwd, cfg, gaps):
         # Everything that would have come out of the record file is `null` rather
         # than omitted or defaulted: a `profile` of `{}` here would read as a
         # harness with no components, which is a different and false claim.
-        gaps.append(_gap("unresolved-composition", _UNRESOLVED))
+        gaps.append(_gap(_KIND_UNRESOLVED, _UNRESOLVED))
         return {
             "digest": digest,
             "profile": None,
@@ -178,8 +203,8 @@ def build_report(cwd, cfg):
     allowed, reason = consent.require_consent(cfg)
     if not allowed:
         if reason == "config_changed":
-            return _refused(cwd, reason, _gap("config-changed", _CONFIG_CHANGED))
-        return _refused(cwd, reason, _gap("not-acknowledged", _NOT_ACKNOWLEDGED))
+            return _refused(cwd, reason, _gap(_KIND_CONFIG_CHANGED, _CONFIG_CHANGED))
+        return _refused(cwd, reason, _gap(_KIND_NOT_ACKNOWLEDGED, _NOT_ACKNOWLEDGED))
 
     gaps = []
     report = _envelope(cwd)
@@ -190,7 +215,7 @@ def build_report(cwd, cfg):
     # this version it is the only honest thing either field can say.
     report["episodes_seen"] = None
     report["measures"] = None
-    gaps.append(_gap("measures-unavailable", _MEASURES))
+    gaps.append(_gap(_KIND_MEASURES, _MEASURES))
     report["gaps"] = gaps
     report["flags"] = list(cfg.get("flags") or ())
     return report
