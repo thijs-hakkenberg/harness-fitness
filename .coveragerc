@@ -1,0 +1,16 @@
+[run]
+# An absolute path, supplied via env interpolation by scripts/coverage-run.sh.
+# A relative `hooks` path silently measures nothing here: every hook script is
+# exercised as a real subprocess whose cwd is a sandboxed tmp project dir, not
+# the repo root.
+source = ${HFIT_COVERAGE_SOURCE}
+branch = True
+parallel = True
+
+[report]
+show_missing = True
+skip_covered = False
+precision = 1
+exclude_lines =
+    pragma: no cover
+    if __name__ == .__main__.:

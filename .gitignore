@@ -1,0 +1,36 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+.venv/
+
+# Coverage. `parallel = True` in .coveragerc means every hook subprocess writes
+# its own data file, so a run leaves hundreds of `.coverage.<host>.<pid>.<rand>`
+# files behind. The bare `.coverage` pattern does not match those.
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# pytest
+.pytest_cache/
+
+# This repo dogfoods beads (and therefore abacus), so a working checkout grows
+# a local issue database that must not be committed.
+.beads/
+.beads-credential-key
+.dolt/
+*.db
+
+# Per-machine permission grants, not shared configuration.
+.claude/settings.local.json
+
+# harness-fitness' own ledger, when `ledger.in_repo` is enabled. The default
+# root is under ~/.claude, but an accidental in-repo write must not be
+# committable.
+.harness-fitness/
+
+# Other plugins' scratch space.
+.harness/
+
+# macOS
+.DS_Store

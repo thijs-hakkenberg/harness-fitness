@@ -1,0 +1,30 @@
+{
+  "name": "harness-fitness",
+  "description": "Measures what your Claude Code harness is made of, and how well it performs",
+  "owner": {
+    "name": "Thijs Hakkenberg",
+    "email": "thijs-hakkenberg@users.noreply.github.com",
+    "url": "https://github.com/thijs-hakkenberg"
+  },
+  "plugins": [
+    {
+      "name": "harness-fitness",
+      "source": "./",
+      "version": "0.1.0-dev",
+      "description": "Measures what your Claude Code harness is made of, and how well it performs",
+      "license": "MIT",
+      "category": "productivity",
+      "keywords": [
+        "harness",
+        "fitness",
+        "tokens-per-outcome",
+        "autonomy",
+        "sensor-coverage",
+        "composition",
+        "beads",
+        "abacus",
+        "otel"
+      ]
+    }
+  ]
+}
