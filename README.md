@@ -47,7 +47,12 @@ inspects your hook configuration. So, precisely:
   credentials.
 - **Prompt text is never persisted** — only a length and a hash prefix.
 - **Nothing leaves the machine.** There is no upload, no endpoint, no telemetry
-  of its own.
+  of its own. The plugin ships no HTTP client, no provider SDK and no API key,
+  and a test asserts it ([ADR-011](adr/011-claude-code-is-the-only-permitted-llm.md)).
+- **No LLM call happens because you installed this.** Every measure is
+  computational. The one optional exception is `/hfit:outcome --infer`, which
+  dispatches a Claude Code subagent using *your* session — never a provider of
+  its own. It is off by default, and turning it on re-asks for your consent.
 - Every artefact is a local file you can read, diff and delete.
 - **Nothing is written at all** until you run `acknowledge.py --accept`.
 
