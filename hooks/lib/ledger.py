@@ -339,3 +339,189 @@ def _diff(before, after):
             )
 
     return added, removed, changed
+
+
+# --------------------------------------------------------------------------
+# Episodes — the store of record for what happened
+# --------------------------------------------------------------------------
+#
+# `changes.jsonl` logs the harness moving; `episodes.jsonl` logs the work done
+# under it. Both are append-only-on-movement, and for the same reason: they are
+# driven from hooks that fire repeatedly over facts that mostly hold still.
+#
+# The episode file's version of that rule has a second edge the composition file
+# does not. `reconcile` runs from four triggers, so appending on every offer would
+# make this a session log — but *skipping a known issue id* would be worse, because
+# an episode reconciled at `Stop` is usually `unstated` and `/hfit:outcome` exists
+# precisely so a human can state it afterwards. A ledger that ignored the second
+# reading would make `verdict_coverage` permanently unimprovable, and coverage is
+# what gates the priority-1 measure (ADR-008).
+#
+# So: never rewritten, appended beside, and the **last append wins**.
+
+EPISODE_SCHEMA = 1
+
+_EPISODES = "episodes.jsonl"
+
+# The only fields excluded from the movement comparison. Everything else — declared
+# or not — counts, which is deliberate: a field added by a later version moves the
+# record without anyone remembering to register it here. That errs toward appending,
+# and the two failure directions are not symmetric. An unnecessary append is a
+# visible extra line; a missed one is a reading nobody stored, which nothing can
+# detect afterwards.
+#
+# `ts` is when this reading was taken, not when anything happened.
+#
+# `schema` describes the record's *shape* rather than the episode. Comparing it
+# would append one record per episode on every upgrade, claiming movement in work
+# that finished weeks ago — and a reader can already see which shape a record has by
+# reading it.
+EPISODE_VOLATILE_FIELDS = ("ts", "schema")
+
+EPISODE_STATUSES = ("new", "updated", "unchanged")
+
+EPISODE_REFUSALS = ("no_issue_id", "no_closed_at")
+
+
+def episodes_path(cwd, cfg=None):
+    return os.path.join(root(cwd, cfg), _EPISODES)
+
+
+def episodes(cwd, cfg=None):
+    """Every readable reading, in the order it was appended.
+
+    File order is the causal order of appends and is the only ordering that
+    resolves which reading of an episode is current — see `latest_episodes`.
+
+    An absent ledger and an unreadable one both present as `[]`, which is why the
+    measure layer must not turn an empty population into a number. It does not:
+    `verdict.coverage([])` is `None`.
+    """
+    return state_store.read_jsonl(episodes_path(cwd, cfg))
+
+
+def latest_episodes(cwd, cfg=None):
+    """One record per issue id — the last reading of each — oldest episode first.
+
+    **Latest wins by file position, not by `ts`.** `$HFIT_NOW` freezes the clock for
+    a whole run and a real clock can step backwards, so two readings can carry the
+    same or a decreasing timestamp and a timestamp sort would leave the winner
+    undefined. Worse than undefined, in the case that matters: it could prefer a
+    stale `unstated` over the verdict a human just declared.
+
+    Ordered by `(closed_at, issue_id)` because reconcile order is the order sessions
+    were opened in, not the order work finished. The sort is on the ISO-8601 Z
+    strings, which is chronological, and puts an unparseable value at one end rather
+    than raising.
+    """
+    latest = {}
+    for record in episodes(cwd, cfg):
+        issue_id = record.get("issue_id")
+        if issue_id:
+            latest[issue_id] = record
+    return sorted(
+        latest.values(),
+        key=lambda r: (r.get("closed_at") or "", r.get("issue_id") or ""),
+    )
+
+
+def record_episode(cwd, record, cfg=None, now=None):
+    """Append a reading of one closed episode, if it moved.
+
+    Returns `{"ok", "reason", "status", "issue_id", "record"}` with
+    `status ∈ new | updated | unchanged`.
+
+    A *downgrade* is accepted — if someone deletes `hfit_verdict` and the episode
+    reads as `unstated` again, that is appended too. This module records what was
+    observed; deciding that a stronger basis outranks a weaker one is `reconcile`'s
+    job. Refusing here would make the ledger disagree with beads, which is the one
+    state no report could explain.
+
+    Consent is checked before any path is resolved as a directory (ADR-014).
+    """
+    cfg = _cfg(cfg)
+
+    allowed, reason = consent.require_consent(cfg)
+    if not allowed:
+        return _episode_refusal(reason)
+
+    if not isinstance(record, dict):
+        return _episode_refusal("no_issue_id")
+
+    issue_id = record.get("issue_id")
+    if not issue_id:
+        # Nothing can be deduplicated against a missing id, so every trigger would
+        # append again. Stored under a placeholder it would be worse: every id-less
+        # episode would collapse into one, and only the last would be measured.
+        return _episode_refusal("no_issue_id")
+
+    if not record.get("closed_at"):
+        # The boundary is the timestamp and not the `status` label, matching
+        # `beads_read.closed_issues`. Without it the episode has no window, so every
+        # measure over it would cover an undefined interval.
+        return _episode_refusal("no_closed_at")
+
+    entry = dict(record)
+    entry["schema"] = EPISODE_SCHEMA
+    entry["ts"] = hfit_time.iso(now)
+
+    previous = _last_episode(cwd, issue_id, cfg)
+    if previous is None:
+        status = "new"
+    elif _episode_moved(previous, entry):
+        status = "updated"
+    else:
+        return {
+            "ok": True,
+            "reason": None,
+            "status": "unchanged",
+            "issue_id": issue_id,
+            "record": previous,
+        }
+
+    if not state_store.append_jsonl(episodes_path(cwd, cfg), entry):
+        return _episode_refusal("write_failed")
+
+    return {
+        "ok": True,
+        "reason": None,
+        "status": status,
+        "issue_id": issue_id,
+        "record": entry,
+    }
+
+
+def _episode_refusal(reason):
+    return {
+        "ok": False,
+        "reason": reason,
+        "status": None,
+        "issue_id": None,
+        "record": None,
+    }
+
+
+def _last_episode(cwd, issue_id, cfg):
+    """The most recent reading of one issue, or `None`.
+
+    Scanned backwards so the answer is the last append rather than the first, which
+    is the same latest-wins rule `latest_episodes` applies.
+    """
+    for record in reversed(episodes(cwd, cfg)):
+        if isinstance(record, dict) and record.get("issue_id") == issue_id:
+            return record
+    return None
+
+
+def _episode_moved(previous, entry):
+    """Whether anything outside `EPISODE_VOLATILE_FIELDS` differs.
+
+    Compared over the union of both key sets, so *removing* a field is movement
+    too — an episode that loses its `hfit_verdict` has changed, and comparing only
+    the new record's keys would read that as holding still.
+    """
+    keys = set(previous) | set(entry)
+    for key in keys - set(EPISODE_VOLATILE_FIELDS):
+        if previous.get(key) != entry.get(key):
+            return True
+    return False

@@ -42,6 +42,31 @@ contract file records its own history so a consumer can tell what it may rely on
   lexical read ([ADR-013](adr/013-the-inferential-verdict-is-a-backfill-tool.md)), so
   switching inference on can never weaken the basis of an episode that already had a
   better one.
+- **`episodes.jsonl`** (in `hooks/lib/ledger.py`) — the store of record for what
+  happened, one reading per closed beads issue. `reconcile` runs from four triggers,
+  so the same episode is offered repeatedly and the append rule is the whole design:
+  **append only on movement**, the same rule `changes.jsonl` already uses. Both halves
+  are load-bearing in opposite directions. Appending on every offer would turn the
+  store of record into a session log whose duplicates are indistinguishable from
+  genuine re-entries; skipping on a known issue id would freeze the first answer
+  forever, and since an episode reconciled at `Stop` is usually `unstated` and
+  `/hfit:outcome` exists so a human can state it afterwards, that would make
+  `verdict_coverage` permanently unimprovable — defeating the only mitigation the
+  coverage gate has. So a record is never rewritten, a second reading is appended
+  beside the first, and the **last append wins**.
+
+  Two details are not the obvious choice and are deliberate. Movement is compared
+  over everything *outside* a small volatile set (`ts`, `schema`) rather than over a
+  declared set of material fields: a later version adding a touch or catch count then
+  moves the record without anyone remembering to register it, and the two failure
+  directions are not symmetric — an unnecessary append is a visible extra line, while
+  a missed one is a reading nobody stored and nothing can detect afterwards. And the
+  winner is resolved by **file position, not by `ts`**: `$HFIT_NOW` freezes the clock
+  for a whole run and a real clock can step backwards, so a timestamp sort would leave
+  the winner undefined — and in the case that matters could prefer a stale `unstated`
+  over the verdict a human had just declared. An episode with no `closed_at` is
+  refused, matching `beads_read.closed_issues`: without it there is no window for a
+  measure to cover.
 - **`spec.manifest.yaml`** — the repo as one node in an enterprise-architecture
   graph: what it is, which artefact pillars describe it, which interfaces it
   offers, and what it depends on. At 0.1.0 that is one inbound interface
