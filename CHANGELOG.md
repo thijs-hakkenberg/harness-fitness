@@ -11,6 +11,55 @@ contract file records its own history so a consumer can tell what it may rely on
 
 ## [Unreleased]
 
+### Added
+
+- **`spec.manifest.yaml`** — the repo as one node in an enterprise-architecture
+  graph: what it is, which artefact pillars describe it, which interfaces it
+  offers, and what it depends on. At 0.1.0 that is one inbound interface
+  (`SessionStart`) and four outbound ones (the composition record, the change log,
+  the report CLI, the consent record).
+- **`tests/unit/test_spec_conformance.py`** — the assertions that keep the
+  documentation and the software agreeing with each other. It does not check that a
+  document is *right*; it checks that a reference resolves. Every ADR number cited
+  anywhere in the repo has a file, every relative link to one resolves from the
+  directory that links it, every interface names a script that exists and cites a
+  contract that exists, every inbound `latency_p99_ms` equals its `hooks.json`
+  timeout, and the three version sources agree. The gap in the ADR sequence is
+  asserted **in both directions**, so writing a reserved number forces deleting the
+  reservation rather than leaving a stale one behind.
+
+### Fixed
+
+- **Five ADRs were cited by shipped code, contracts and tests without existing.**
+  `hooks/hooks.json` and `test_hooks_manifest.py` both pointed at `adr/004`; the
+  contracts and the changelog pointed at `adr/006`, `008`, `010` and `014`. A public
+  repo referring to a file that is not there is a worse artefact than one that says
+  nothing, because the reference reads as a promise that the reasoning was written
+  down. All five are now written:
+  [ADR-004](adr/004-there-is-no-pretooluse-hook.md) (no `PreToolUse`, and no
+  `SubagentStop`, `Notification` or `PermissionRequest`),
+  [ADR-006](adr/006-the-hot-path-is-computational-only.md) (the hot path is
+  computational only, and the instrument is the smallest thing in the profile it
+  prints), [ADR-008](adr/008-verdict-coverage-gates-tokens-per-outcome.md) (verdict
+  coverage is a headline number and below threshold it refuses tokens per outcome),
+  [ADR-010](adr/010-hook-commands-are-hashed-never-stored.md) (hook and MCP command
+  strings are hashed, never stored) and
+  [ADR-014](adr/014-consent-gates-every-write.md) (consent gates every write, and
+  the gate is checked before a path is resolved).
+- **Nine placeholder ADR links** pointed at a directory instead of a file, so
+  following one landed nowhere.
+- **Three declared artefact pillars were untracked.** `features/`, `contexts/` and
+  `adr/analysis/` are empty at 0.1.0, and git does not store empty directories — so
+  they existed locally and would have been absent from a fresh clone, failing the
+  new conformance test in the one environment where nobody is watching. Each now
+  holds a tracked placeholder, and the emptiness assertion ignores dotfiles so the
+  placeholder is not mistaken for content.
+- **`pyyaml` is declared where it is installed.** It reads `spec.manifest.yaml` and
+  is imported inside a fixture, not at module scope: a missing PyYAML skips the
+  manifest tests and leaves the dangling-reference guard running. An
+  always-running test asserts the CI workflow installs it, because a guard that
+  quietly disables itself in CI is worth nothing there.
+
 ## [0.1.0] — 2026-09-14
 
 First public release. It answers one of the two questions in the brief — **what is
@@ -40,10 +89,10 @@ whose only value is that its numbers can be trusted.
   measuring the developer's machine, not the code.
 - Foundation modules, each written against a failing test: `hfit_time` (a
   freezable clock), `_security` (path refusal and one-way command reduction —
-  [ADR-010](adr/)), `state_store` (atomic, mode-restricted writes and
+  [ADR-010](adr/010-hook-commands-are-hashed-never-stored.md)), `state_store` (atomic, mode-restricted writes and
   lossy-tolerant reads), `hfit_config` (defaults, deep merge and the governing
   subset), `consent` (nothing is written until a fingerprint matches —
-  [ADR-014](adr/)) and `hook_io` (the fail-open hook protocol).
+  [ADR-014](adr/014-consent-gates-every-write.md)) and `hook_io` (the fail-open hook protocol).
 - [ADR-011](adr/011-claude-code-is-the-only-permitted-llm.md): Claude Code is
   the only LLM this plugin will ever use — no HTTP client, no provider SDK, no
   endpoint, no API key, not even as a fallback. Where a subagent cannot be
@@ -131,7 +180,7 @@ whose only value is that its numbers can be trusted.
   `compositions/` and `changes.jsonl`. **It emits no `additionalContext`** — a
   `SessionStart` response may inject text into every session's context window, and
   a tool whose purpose is to measure what the harness costs must not become a line
-  item in that cost ([ADR-006](adr/)). Everything it learns goes to a file, read on
+  item in that cost ([ADR-006](adr/006-the-hot-path-is-computational-only.md)). Everything it learns goes to a file, read on
   demand. Driven as a real subprocess in every test, because an in-process call
   cannot catch the three failures that make a hook indistinguishable from a plugin
   that does nothing: an import error, a stdout-protocol violation, a non-zero exit.
@@ -140,7 +189,7 @@ whose only value is that its numbers can be trusted.
   rewritten, so a later session under a different model moves nothing and the stored
   pin keeps its original value, which means an episode must resolve its own
   `env_hash` at close time and must never read one off a composition record
-  ([ADR-007](adr/)); and the library beneath this hook is **total** — `state_store`
+  ([ADR-007](adr/007-the-composition-digest-sits-beside-the-env-hash.md)); and the library beneath this hook is **total** — `state_store`
   returns `False` and `hfit_time` falls back rather than raising — so `fail_open` is
   a last line of defence here and not the mechanism, and a blocked write degrades to
   *nothing recorded* rather than to a swallowed traceback. The second is asserted
@@ -159,7 +208,7 @@ whose only value is that its numbers can be trusted.
   plugin's completeness. The surface also **writes nothing**, which is a
   measurement property and not tidiness — a reporting command that creates state
   has changed the thing it reports on, and before consent it would be creating
-  that state in defiance of [ADR-014](adr/). It does not read stdin, because under
+  that state in defiance of [ADR-014](adr/014-consent-gates-every-write.md). It does not read stdin, because under
   a skill stdin is a pipe that is never closed and a surface that reads it hangs
   the session; the tests close stdin rather than feeding it, so a regression there
   fails here.
@@ -188,7 +237,7 @@ whose only value is that its numbers can be trusted.
   *existence* rather than on a file listing, because a `makedirs` on the way to a
   read leaves a directory no file listing can see. The notice names the ledger
   root, says what is never written and that nothing leaves the machine
-  ([ADR-011](adr/)), and names the governing keys that would re-ask — bound to
+  ([ADR-011](adr/011-claude-code-is-the-only-permitted-llm.md)), and names the governing keys that would re-ask — bound to
   `hfit_config.governing()`, because a user re-prompted after editing a config
   file who cannot tell a deliberate re-ask from a bug will stop using the plugin.
 
@@ -211,7 +260,7 @@ whose only value is that its numbers can be trusted.
   one line, which is as close to the real property as a lexical test can get, and
   unlike the original it fails when the instruction is deleted.
 - `model_basis` was resolved at every session start and then discarded at write
-  time. `env_pin` returns it, [ADR-007](adr/) obliges the comparison layer to
+  time. `env_pin` returns it, [ADR-007](adr/007-the-composition-digest-sits-beside-the-env-hash.md) obliges the comparison layer to
   refuse on a differing basis exactly as it refuses on a differing `env_hash`, and
   `composition.build` accepted only the hash — so the obligation was unhonourable
   from stored data. Found by designing the read surface rather than by a failing

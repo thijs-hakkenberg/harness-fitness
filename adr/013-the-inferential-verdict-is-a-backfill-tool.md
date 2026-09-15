@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Date:** 2026-09-14
-- **Related:** [ADR-008](.) verdict-coverage-gates-tokens-per-outcome, [ADR-011](011-claude-code-is-the-only-permitted-llm.md)
+- **Related:** [ADR-008](008-verdict-coverage-gates-tokens-per-outcome.md) verdict-coverage-gates-tokens-per-outcome, [ADR-011](011-claude-code-is-the-only-permitted-llm.md)
 
 ## Context
 

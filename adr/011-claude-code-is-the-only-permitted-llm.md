@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Date:** 2026-09-14
-- **Related:** [ADR-006](.) hot-path-is-computational-only, [ADR-013](013-the-inferential-verdict-is-a-backfill-tool.md), [ADR-014](.) consent-gates-every-write
+- **Related:** [ADR-006](006-the-hot-path-is-computational-only.md) hot-path-is-computational-only, [ADR-013](013-the-inferential-verdict-is-a-backfill-tool.md), [ADR-014](014-consent-gates-every-write.md) consent-gates-every-write
 
 ## Context
 
