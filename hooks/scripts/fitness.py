@@ -138,7 +138,9 @@ _UNSTATED_VERDICT = (
     "episodes whose success is known is not an average over the work. Close issues "
     "with `bd close <id> --reason \"accepted: …\"` — the `accepted:`, `rejected:`, "
     "`abandoned:` and `superseded:` prefixes are what make an outcome structured "
-    "rather than guessed at."
+    "rather than guessed at. For an issue already closed without one, `/hfit:outcome` "
+    "declares the verdict after the fact, which ranks above a prefix rather than "
+    "merely repairing it."
 )
 _MEASURES = (
     "The four measures are not implemented at this version. This release records "
