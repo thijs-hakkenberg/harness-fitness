@@ -88,6 +88,13 @@ _TRUTHY = ("1", "true", "yes", "on")
 # is routinely *compatible with* rather than equal to what ran.
 _ALIAS_HINT = "declared"
 
+# How a model came to be claimed. Declared as a tuple because it is a vocabulary two
+# other layers bind to: an episode stores one of these beside its `env_hash`, and
+# ADR-007 obliges the comparison layer to refuse on a differing basis exactly as it
+# refuses on a differing hash. A basis with no declared name would reach that layer
+# with no rule covering it.
+MODEL_BASES = ("observed", _ALIAS_HINT, "unknown")
+
 
 def hash_payload(env):
     """Exactly the fields the hash is computed over, flat.

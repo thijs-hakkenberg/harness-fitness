@@ -52,7 +52,9 @@ argv = sys.argv[1:]
 record = os.environ.get("HFIT_STUB_RECORD")
 if record:
     with open(record, "a") as fh:
-        fh.write(json.dumps({"bin": name, "argv": argv}) + "\\n")
+        fh.write(
+            json.dumps({"bin": name, "argv": argv, "cwd": os.getcwd()}) + "\\n"
+        )
 
 rc, out, err = 0, "", ""
 rules_path = os.environ.get("HFIT_STUB_RULES")
@@ -115,8 +117,7 @@ class Stubs:
         target.chmod(0o755)
         return self
 
-    def calls(self, binary=None):
-        """Every recorded invocation, oldest first, as a list of argv lists."""
+    def _records(self, binary=None):
         if not self.record_path.exists():
             return []
         out = []
@@ -129,8 +130,23 @@ class Stubs:
             except ValueError:
                 continue
             if binary is None or rec.get("bin") == binary:
-                out.append(rec.get("argv") or [])
+                out.append(rec)
         return out
+
+    def calls(self, binary=None):
+        """Every recorded invocation, oldest first, as a list of argv lists."""
+        return [rec.get("argv") or [] for rec in self._records(binary)]
+
+    def invocations(self, binary=None):
+        """Every recorded invocation as `{"bin", "argv", "cwd"}`, oldest first.
+
+        The `cwd` is here because `bd` resolves *which database* it reads from the
+        working directory it was started in. A test that asserts only on argv cannot
+        tell a read of this project's issues from a read of whatever database happens
+        to sit above the process's inherited cwd — and both produce a plausible list
+        of issues, so the wrong one is a wrong answer rather than an error.
+        """
+        return self._records(binary)
 
     def reset(self):
         if self.record_path.exists():

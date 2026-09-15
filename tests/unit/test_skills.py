@@ -81,6 +81,21 @@ def _skill_text(path):
         return fh.read()
 
 
+def _reads_fitness(text):
+    """Whether this skill's documented command is the fitness report.
+
+    `gaps[]` is a `fitness.py` concept. A skill whose command is `outcome.py` reports
+    a `reason` and a `note` and never sees a gap kind at all, so binding it to
+    `fitness.GAP_KINDS` would make it name eight strings it has no instruction to give
+    — which is the same fabrication risk the assertion exists to prevent, pointed the
+    other way.
+
+    Decided from the fenced command rather than from the skill's name, so a rename
+    cannot quietly move a skill out of the check.
+    """
+    return any("fitness.py" in cmd for cmd in _commands(text))
+
+
 # Parametrised over the directory listing rather than over a hard-coded name, so the
 # next four skills inherit every assertion here the moment they are created.
 @pytest.fixture(params=[p.name for p in skill_dirs()] or [pytest.param(None)])
@@ -166,10 +181,27 @@ class TestItCannotInventAnExplanation:
         # Bound to the CLI's own declaration, not to a list retyped here, so adding
         # a kind without telling the skill about it fails. The failure mode this
         # guards is silent: an undocumented kind does not error, it gets narrated.
+        #
+        # Scoped to the skills that actually read the fitness report — see
+        # `_reads_fitness`, and see the guard below, which is what keeps that scoping
+        # from being a way to make this test pass over nothing.
         text = _skill_text(skill)
+        if not _reads_fitness(text):
+            pytest.skip("does not read the fitness report; emits no gap kinds")
 
         missing = [k for k in fitness.GAP_KINDS if k not in text]
         assert missing == [], "gap kinds with no instruction: %s" % missing
+
+    def test_at_least_one_skill_reads_the_fitness_report(self):
+        # The non-vacuity guard for the skip above, and the reason the skip is safe.
+        # A rename of `fitness.py`, or a fence rewritten to call it some other way,
+        # would otherwise turn the gap-kind assertion into eight skips reported as
+        # green — a check that has stopped running looks exactly like a check that
+        # keeps passing.
+        readers = [p.name for p in skill_dirs() if _reads_fitness(_skill_text(p))]
+
+        assert readers, "no skill documents a fitness.py command; the gap-kind " \
+                        "assertion above is now skipping every skill"
 
     def test_it_tells_the_reader_to_check_ok_first(self, skill):
         # The one instruction shared by every skill in this plugin. A skill that

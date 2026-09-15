@@ -1,10 +1,10 @@
 """`fitness.py --json` — the read surface, driven as a real subprocess.
 
-At 0.1.0 this reports composition only: there are no episodes yet, so three of the
-four measures have no inputs and the fourth has no denominator. That makes the
-*shape* of a report with nothing to report the entire subject of this file, and it
-is the more interesting half of the contract — a reader meeting this plugin for the
-first time meets it in exactly this state.
+At 0.2.0 this reports composition and the episode population: `episodes_seen` and
+`verdict_coverage` are real, the four measures still are not. That makes the *shape*
+of a report with little to report the larger subject of this file, and it is the more
+interesting half of the contract — a reader meeting this plugin for the first time
+meets it in exactly that state.
 
 Two disciplines are asserted throughout, both inherited as interface contracts
 rather than as code:
@@ -13,13 +13,15 @@ rather than as code:
   zeroed, not empty — absent. A caller that finds `measures` present has been told
   the read succeeded; one that finds it missing cannot mistake a failure for a
   result.
-- **Unknown is never zero.** Where a number cannot be computed yet, the field is
-  `null` and a `gaps[]` entry says why. `episodes_seen: 0` would assert we counted
-  and found none, when in truth the counter does not exist until 0.2.0.
+- **Unknown is never zero.** Where a number cannot be computed, the field is `null`
+  and a `gaps[]` entry says why. This is why `episodes_seen` is three-valued rather
+  than two: an *absent* ledger honestly counts `0`, because nothing has been
+  reconciled here; a *present* ledger yielding nothing is a fault, and counting that
+  as `0` would report a fault as a finding about the user's work.
 
 And one this file adds: **a read surface writes nothing.** A reporting command that
-creates state changes the thing it reports on, and at 0.1.0 it would also create it
-*before* consent had been given.
+creates state changes the thing it reports on, and before consent it would also
+create it *before* the user had agreed to any of it.
 """
 
 import json
@@ -35,6 +37,25 @@ from conftest import entries_under
 
 SCRIPT = "fitness.py"
 SNAPSHOT = "snapshot_composition.py"
+RECONCILE = "reconcile_hook.py"
+
+# Measured against `bd` 1.1.2: `bd list --all --json` prints a bare array of this
+# shape, with abacus's keys already on the issue's `metadata`.
+CLOSED = {
+    "id": "Proj-abc",
+    "title": "a closed thing",
+    "status": "closed",
+    "issue_type": "task",
+    "started_at": "2026-09-14T20:52:02Z",
+    "closed_at": "2026-09-15T08:35:23Z",
+    "close_reason": "accepted: it works",
+    "metadata": {
+        "abacus_schema": 1,
+        "abacus_partial": False,
+        "abacus_tokens_total": 8134206,
+        "abacus_tool_calls": 57,
+    },
+}
 
 ONE_PLUGIN = {
     "abacus@abacus": {
@@ -69,6 +90,14 @@ def accepted(cfg):
     return cfg
 
 
+def closed(**over):
+    """One closed issue, overridable field by field."""
+    out = dict(CLOSED)
+    out["metadata"] = dict(CLOSED["metadata"])
+    out.update(over)
+    return out
+
+
 def payload(cwd):
     return {"cwd": str(cwd), "hook_event_name": "SessionStart", "source": "startup"}
 
@@ -99,6 +128,25 @@ def recorded(run_hook, settings_tree, accepted):
     tree = settings_tree(user=ENABLED_ONE, plugins=ONE_PLUGIN)
     run_hook(SNAPSHOT, payload(tree.project))
     return tree
+
+
+@pytest.fixture
+def reconciled(run_hook, stub_bin, recorded):
+    """Put real episodes in the project's ledger, via the real `Stop` hook.
+
+    Written by reconciliation rather than by hand, for the same reason `recorded`
+    runs the real `SessionStart` hook: the CLI's whole job is to count what that
+    hook wrote, and a fixture that fabricated the lines would let the two drift
+    apart while both suites stayed green. It is also the only way the *field names*
+    are exercised — `verdict.coverage` reads `basis` and an episode record stores
+    `verdict_basis`, a mapping no hand-built fixture would notice was missing.
+    """
+
+    def install(*issues):
+        stub_bin.on("bd", ["list"], stdout=list(issues) or [CLOSED])
+        run_hook(RECONCILE, {"hook_event_name": "Stop", "cwd": str(recorded.project)})
+
+    return install
 
 
 class TestTheEnvelope:
@@ -166,6 +214,128 @@ class TestTheCompositionItReports:
         assert rep["changes"][-1]["added"] == ["plugin:other@abacus"]
 
 
+class TestTheEpisodesItCounts:
+    def test_an_unvisited_project_counts_zero_rather_than_null(self, run_cli, recorded):
+        # `0` is the honest answer and `null` would not be. The ledger file is
+        # absent, and `append_jsonl` creates it only on a successful append — so
+        # nothing has been reconciled here, and `episodes_seen` counts what the
+        # ledger holds rather than what the user has done.
+        rep = report(run_cli, recorded.project)
+
+        assert rep["episodes_seen"] == 0
+        assert "no-episodes-recorded" in gap_kinds(rep)
+
+    def test_it_counts_what_reconciliation_wrote(self, run_cli, recorded, reconciled):
+        reconciled(closed(), closed(id="Proj-def", closed_at="2026-09-15T09:00:00Z"))
+
+        rep = report(run_cli, recorded.project)
+
+        assert rep["episodes_seen"] == 2
+        assert "no-episodes-recorded" not in gap_kinds(rep)
+
+    def test_a_re_read_of_one_episode_is_still_one_episode(
+        self, run_cli, recorded, reconciled
+    ):
+        # The ledger is append-only *on movement*, so one issue can hold several
+        # readings — a verdict declared after the fact appends a second line. Counting
+        # lines would report a project that revisits its outcomes as a project that
+        # did twice the work.
+        reconciled(closed())
+        reconciled(closed(close_reason="rejected: it did not"))
+
+        rep = report(run_cli, recorded.project)
+
+        assert rep["episodes_seen"] == 1
+
+    def test_a_present_but_unreadable_ledger_is_null_and_not_zero(
+        self, run_cli, recorded, accepted
+    ):
+        # `ledger.episodes` presents an absent ledger and an unreadable one alike as
+        # `[]`, and the two are not the same claim. A file that exists was created by
+        # an append that succeeded, so one yielding no records is a fault; reporting
+        # it as `0` would put a filesystem problem into a number about the user's
+        # work, where nothing downstream could tell the two apart.
+        os.makedirs(ledger.episodes_path(str(recorded.project), accepted))
+
+        rep = report(run_cli, recorded.project)
+
+        assert rep["ok"] is True
+        assert rep["episodes_seen"] is None
+        assert "episodes-unreadable" in gap_kinds(rep)
+
+
+class TestTheVerdictCoverageItReports:
+    def test_it_reports_the_stated_share_and_the_basis_mix(
+        self, run_cli, recorded, reconciled
+    ):
+        # The mix travels with the number because the headline cannot show it: 50%
+        # built from `accepted:` prefixes is a different fact from 50% built by the
+        # lexicon, and only the first is worth trusting a delta on.
+        reconciled(
+            closed(),
+            closed(id="Proj-def", closed_at="2026-09-15T09:00:00Z", close_reason="Closed"),
+        )
+
+        rep = report(run_cli, recorded.project)
+
+        assert rep["verdict_coverage"]["coverage"] == 0.5
+        assert rep["verdict_coverage"]["n"] == 2
+        assert rep["verdict_coverage"]["by_basis"]["structured"] == 1
+        assert rep["verdict_coverage"]["by_basis"]["unstated"] == 1
+
+    def test_low_coverage_says_so_on_the_report_itself(
+        self, run_cli, recorded, reconciled
+    ):
+        # W2's mitigation, and the reason it is a gap rather than a footnote: the
+        # verdict habit is the input tokens-per-outcome is gated on (ADR-008), so a
+        # report built from mostly-unstated outcomes has to say that where a reader
+        # cannot miss it.
+        reconciled(
+            closed(),
+            closed(id="Proj-def", closed_at="2026-09-15T09:00:00Z", close_reason="Closed"),
+        )
+
+        rep = report(run_cli, recorded.project)
+
+        assert "unstated-verdict" in gap_kinds(rep)
+
+    def test_full_coverage_carries_no_gap(self, run_cli, recorded, reconciled):
+        reconciled(
+            closed(),
+            closed(id="Proj-def", closed_at="2026-09-15T09:00:00Z"),
+        )
+
+        rep = report(run_cli, recorded.project)
+
+        assert rep["verdict_coverage"]["coverage"] == 1.0
+        assert "unstated-verdict" not in gap_kinds(rep)
+
+    def test_over_an_empty_population_the_share_is_null_and_n_is_zero(
+        self, run_cli, recorded
+    ):
+        # The two halves answer different questions and only one of them refuses:
+        # `n: 0` is a count and it is correct, `coverage: null` is a ratio over no
+        # denominator. `0.0` here would send someone looking for a habit problem
+        # they do not have.
+        rep = report(run_cli, recorded.project)
+
+        assert rep["verdict_coverage"]["coverage"] is None
+        assert rep["verdict_coverage"]["n"] == 0
+        assert rep["verdict_coverage"]["reason"] == "no_episodes"
+
+    def test_an_unreadable_ledger_makes_the_whole_block_null(
+        self, run_cli, recorded, accepted
+    ):
+        # Not `{"coverage": null, "n": 0, "reason": "no_episodes"}` — that would name
+        # the wrong cause. Computing coverage over the `[]` an unreadable ledger
+        # returns would have the report state a reason it did not establish.
+        os.makedirs(ledger.episodes_path(str(recorded.project), accepted))
+
+        rep = report(run_cli, recorded.project)
+
+        assert rep["verdict_coverage"] is None
+
+
 class TestUnknownIsNeverZero:
     def test_the_measures_are_null_at_this_version_not_empty(self, run_cli, recorded):
         # `{}` would say the measure layer ran and produced nothing. It does not
@@ -174,14 +344,6 @@ class TestUnknownIsNeverZero:
         rep = report(run_cli, recorded.project)
 
         assert rep["measures"] is None
-
-    def test_the_episode_count_is_null_rather_than_zero(self, run_cli, recorded):
-        # The distinction that matters: `0` asserts we looked at the episode store
-        # and found it empty, which would be a claim about the user's work. There is
-        # no episode store yet.
-        rep = report(run_cli, recorded.project)
-
-        assert rep["episodes_seen"] is None
 
     def test_a_gap_says_why_the_measures_are_absent(self, run_cli, recorded):
         rep = report(run_cli, recorded.project)
@@ -217,6 +379,7 @@ class TestTheFailedRead:
 
         assert "measures" not in rep
         assert "episodes_seen" not in rep
+        assert "verdict_coverage" not in rep
         assert "current" not in rep
         # `changes` belongs in the same list: an empty change log is a real and
         # legitimate state of a successful read, so emitting `[]` here would say
@@ -308,9 +471,10 @@ class TestTheCliContract:
         assert "--not-a-flag" in result.stderr
 
     def test_it_refuses_to_print_anything_but_json_for_now(self, run_cli, recorded):
-        # `--json` is mandatory at 0.1.0. A default human format would be a second
-        # output contract to keep in step with the first, and every consumer here
-        # is a skill.
+        # `--json` is mandatory on this surface. A default human format would be a
+        # second output contract to keep in step with the first, and every consumer
+        # here is a skill. `outcome.py` diverges deliberately — its prose form is
+        # explicitly uncontracted, because a person types that one by hand.
         result = run_cli(SCRIPT, (), cwd=recorded.project)
 
         assert result.returncode != 0

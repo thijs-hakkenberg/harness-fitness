@@ -12,10 +12,20 @@ read also said `null` the two would be indistinguishable, and a skill would repo
 "no measures available" where the honest answer is "consent was never given".
 Absence of the key is the only encoding that cannot be confused with a result.
 
-**Unknown is never zero.** Where a number cannot be computed, the field is `null`
-and a `gaps[]` entry says why in a sentence a person can act on. `episodes_seen: 0`
-would be a claim about the user's work — that we counted their closed issues and
-found none — when the truth is that no episode store is written until 0.2.0.
+**Unknown is never zero, which is why `episodes_seen` is three-valued.** A number
+that cannot be computed is `null` with a `gaps[]` entry saying why in a sentence a
+person can act on. But `0` is not always the dishonest answer: an *absent* ledger
+means nothing has been reconciled in this project, and reporting that as `0` is
+exactly right, because the field counts what the ledger holds. A ledger that
+*exists* and yields nothing is different — `state_store.append_jsonl` creates the
+file only on an append that succeeded, so an empty read there is a fault on this
+machine, and `0` would put that fault inside a number about the user's work where
+nothing downstream could separate the two. That case is `null`.
+
+`verdict_coverage` splits along the same seam and is worth stating separately,
+because the two halves of it disagree: over an absent ledger `n` is `0` and correct,
+while `coverage` is `null`, since a ratio over no denominator is not `0.0`. A `0.0`
+there would send someone looking for a habit problem they do not have.
 
 **This surface writes nothing, and that is a measurement property.** A reporting
 command that creates state has changed the thing it reports on; before consent it
@@ -45,6 +55,7 @@ sys.path.insert(0, os.path.join(_HOOKS, "lib"))
 import consent  # noqa: E402
 import hfit_config  # noqa: E402
 import ledger  # noqa: E402
+import verdict as verdict_lib  # noqa: E402
 
 SCHEMA = 1
 
@@ -69,6 +80,9 @@ _KIND_NOT_ACKNOWLEDGED = "not-acknowledged"
 _KIND_CONFIG_CHANGED = "config-changed"
 _KIND_NO_COMPOSITION = "no-composition-recorded"
 _KIND_UNRESOLVED = "unresolved-composition"
+_KIND_NO_EPISODES = "no-episodes-recorded"
+_KIND_EPISODES_UNREADABLE = "episodes-unreadable"
+_KIND_UNSTATED_VERDICT = "unstated-verdict"
 _KIND_MEASURES = "measures-unavailable"
 
 GAP_KINDS = (
@@ -76,6 +90,9 @@ GAP_KINDS = (
     _KIND_CONFIG_CHANGED,
     _KIND_NO_COMPOSITION,
     _KIND_UNRESOLVED,
+    _KIND_NO_EPISODES,
+    _KIND_EPISODES_UNREADABLE,
+    _KIND_UNSTATED_VERDICT,
     _KIND_MEASURES,
 )
 
@@ -99,10 +116,36 @@ _UNRESOLVED = (
     "file could not be read, so the profile and the environment pin are "
     "unavailable for it."
 )
+_NO_EPISODES = (
+    "No episode has been reconciled in this project yet, so `episodes_seen` is 0 "
+    "rather than unknown. An episode is one closed beads issue: close one with "
+    "`bd close <id> --reason \"accepted: it works\"` and the next Stop hook records "
+    "it."
+)
+_EPISODES_UNREADABLE = (
+    "The episode ledger exists but yielded no records, so `episodes_seen` and "
+    "`verdict_coverage` are null rather than 0. A ledger file is only created by an "
+    "append that succeeded, so an empty read is a fault on this machine and not a "
+    "fact about your work. Check the file's permissions and that it is a file."
+)
+# Interpolated, so the report states the number it is complaining about. A gap that
+# said only "coverage is low" would leave the reader unable to tell a habit that is
+# nearly there from one that has not started.
+_UNSTATED_VERDICT = (
+    "Only {actual}% of episodes here state an outcome, below the {minimum}% this "
+    "project requires. Tokens per outcome is gated on that number (ADR-008) and "
+    "will be refused until it rises, because an average over the minority of "
+    "episodes whose success is known is not an average over the work. Close issues "
+    "with `bd close <id> --reason \"accepted: …\"` — the `accepted:`, `rejected:`, "
+    "`abandoned:` and `superseded:` prefixes are what make an outcome structured "
+    "rather than guessed at. For an issue already closed without one, `/hfit:outcome` "
+    "declares the verdict after the fact, which ranks above a prefix rather than "
+    "merely repairing it."
+)
 _MEASURES = (
     "The four measures are not implemented at this version. This release records "
-    "harness composition only; episodes, verdicts and measures arrive in 0.2.0 "
-    "and 0.3.0."
+    "harness composition and episodes; the measures themselves arrive in 0.3.0 "
+    "onwards."
 )
 
 
@@ -199,6 +242,75 @@ def _current(cwd, cfg, gaps):
     }
 
 
+def _threshold(cfg):
+    """`min_verdict_coverage` as a float, or `None` if it is unusable.
+
+    A `bool` is excluded even though it is an `int`: `true` would compare as `1.0`
+    and make every project fail the check, which is the one direction of a broken
+    config that would look like a finding rather than like a fault.
+    """
+    minimum = cfg.get("min_verdict_coverage")
+    if isinstance(minimum, bool) or not isinstance(minimum, (int, float)):
+        return None
+    return float(minimum)
+
+
+def _coverage(records, cfg, gaps):
+    """`verdict_coverage` over the latest reading of each episode.
+
+    The field name is translated on the way in. `verdict.coverage` reads `basis`
+    because it is written to be driven from `verdict.classify` output, while an
+    episode record stores the same value under `verdict_basis` — the ledger has other
+    bases in it and an unqualified `basis` there would be ambiguous. Passing the
+    records through untranslated would silently score every episode as unstated,
+    which is the failure this whole surface exists to prevent: a plausible number,
+    wrong, with nothing anywhere saying so.
+    """
+    reading = verdict_lib.coverage(
+        [{"basis": record.get("verdict_basis")} for record in records]
+    )
+
+    share = reading["coverage"]
+    minimum = _threshold(cfg)
+    if share is not None and minimum is not None and share < minimum:
+        # W2's mitigation, and the reason it is a gap and not a footnote: poor verdict
+        # coverage is the single largest threat to every number this plugin will ever
+        # print, so it is said on the report rather than in the README.
+        gaps.append(
+            _gap(
+                _KIND_UNSTATED_VERDICT,
+                _UNSTATED_VERDICT.format(
+                    actual=int(round(share * 100)), minimum=int(round(minimum * 100))
+                ),
+            )
+        )
+    return reading
+
+
+def _episodes(cwd, cfg, gaps):
+    """`(episodes_seen, verdict_coverage)` — three-valued, see the module docstring.
+
+    Counted over `latest_episodes` rather than over every line, because the ledger is
+    append-only *on movement*: one issue holds several readings when a verdict is
+    declared after the fact, and counting lines would report a project that revisits
+    its outcomes as a project that did twice the work.
+    """
+    records = ledger.latest_episodes(cwd, cfg)
+    if records:
+        return len(records), _coverage(records, cfg, gaps)
+
+    # `ledger.episodes` presents an absent ledger and an unreadable one alike as
+    # `[]`, so the file itself is what separates them. Nothing is created by asking.
+    if os.path.exists(ledger.episodes_path(cwd, cfg)):
+        gaps.append(_gap(_KIND_EPISODES_UNREADABLE, _EPISODES_UNREADABLE))
+        # Not `verdict.coverage([])`: that would answer `reason: "no_episodes"`, which
+        # is a cause this read never established and the opposite of what happened.
+        return None, None
+
+    gaps.append(_gap(_KIND_NO_EPISODES, _NO_EPISODES))
+    return 0, _coverage((), cfg, gaps)
+
+
 def build_report(cwd, cfg):
     allowed, reason = consent.require_consent(cfg)
     if not allowed:
@@ -211,9 +323,9 @@ def build_report(cwd, cfg):
     report["ok"] = True
     report["current"] = _current(cwd, cfg, gaps)
     report["changes"] = ledger.changes(cwd, cfg)
-    # Both `null`, both with a gap. Not implemented is not the same as zero, and at
-    # this version it is the only honest thing either field can say.
-    report["episodes_seen"] = None
+    report["episodes_seen"], report["verdict_coverage"] = _episodes(cwd, cfg, gaps)
+    # Still `null`, still with a gap, and now the only field in the report that is.
+    # Not implemented is not the same as zero.
     report["measures"] = None
     gaps.append(_gap(_KIND_MEASURES, _MEASURES))
     report["gaps"] = gaps

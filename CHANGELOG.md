@@ -11,13 +11,167 @@ contract file records its own history so a consumer can tell what it may rely on
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-09-15
+
+The episode layer. 0.1.0 could say what the harness was composed of; it had no way
+to say **what happened while that harness was in force**. This release supplies the
+unit — an episode is one closed beads issue, because `closed_at` is the only
+boundary in the system that is not a guess — and the thing abacus has never had: an
+**outcome**. abacus records lifecycle faithfully and never success, so
+`tokens_per_outcome` had a numerator and no denominator.
+
+The measures are still `null`. What moved is that two of the numbers they are gated
+on are now real: `episodes_seen` and `verdict_coverage` are read off a ledger rather
+than reported as not-implemented. That ordering is deliberate — the gate
+([ADR-008](adr/008-verdict-coverage-gates-tokens-per-outcome.md)) has to be
+measurable before the measure it gates is written, or the first thing anyone would
+see is a number computed over a population nobody had checked.
+
+The uncomfortable finding this release is shaped around: **on this machine 10 of 12
+closed issues carry `bd`'s default `close_reason` of exactly `"Closed"`.** Verdict
+coverage is not a threshold that will be met by better code. It is a habit, and
+`/hfit:outcome` exists because the habit cannot be retroactive — the moment of the
+close has already passed for almost every issue that matters.
+
 ### Added
 
+- **`hooks/lib/beads_read.py`** — read-only access to the beads database, which is
+  where the episode population comes from. Three wire shapes were measured against
+  `bd` 1.1.2 on a real database rather than inferred: `bd list --all --json` prints a
+  bare array with no `issues` wrapper, `bd show <id> --json` prints a
+  single-element array rather than the object, and a project with no database exits
+  **1 with empty stdout**. That last one is the reason the module exists in this
+  shape: a reader mapping non-zero to "no issues" would report a project with a
+  hundred closed episodes as a project with none, so every function returns
+  `issues: None` on failure and **never `[]`**. `no_database` and `bd_error` are named
+  apart because one is a benign sentence and the other is a defect, and a single
+  reason covering both would be wrong half the time.
+- **`hooks/lib/verdict.py`** — the verdict ladder
+  `declared > structured > lexical > inferential > unstated`, which supplies the
+  denominator abacus does not have: abacus records lifecycle and never outcome. Each
+  answer carries the *basis* it was reached by, because the five ways of learning an
+  outcome are not equally trustworthy and must not be averaged into one claim.
+  `unstated` is the dominant real case — 10 of 12 closed issues measured here carry
+  `bd`'s default `close_reason` of exactly `"Closed"` — and it is not a failure:
+  counted as a rejection it reports a working harness as a failing one, counted as a
+  success it puts unexamined work in the passing denominator, so it is excluded from
+  both and published as a coverage shortfall via `verdict_coverage`
+  ([ADR-008](adr/008-verdict-coverage-gates-tokens-per-outcome.md)). The lexicon
+  refuses rather than guesses: text pointing both ways is `unstated` with
+  `reason: "ambiguous"`, and negation is handled explicitly because `"not working"`
+  contains `"working"` — the single most damaging error available here, since it
+  moves an episode into the passing count. `inferential` is attempted *after* the
+  lexical read ([ADR-013](adr/013-the-inferential-verdict-is-a-backfill-tool.md)), so
+  switching inference on can never weaken the basis of an episode that already had a
+  better one.
+- **`episodes.jsonl`** (in `hooks/lib/ledger.py`) — the store of record for what
+  happened, one reading per closed beads issue. `reconcile` runs from four triggers,
+  so the same episode is offered repeatedly and the append rule is the whole design:
+  **append only on movement**, the same rule `changes.jsonl` already uses. Both halves
+  are load-bearing in opposite directions. Appending on every offer would turn the
+  store of record into a session log whose duplicates are indistinguishable from
+  genuine re-entries; skipping on a known issue id would freeze the first answer
+  forever, and since an episode reconciled at `Stop` is usually `unstated` and
+  `/hfit:outcome` exists so a human can state it afterwards, that would make
+  `verdict_coverage` permanently unimprovable — defeating the only mitigation the
+  coverage gate has. So a record is never rewritten, a second reading is appended
+  beside the first, and the **last append wins**.
+
+  Two details are not the obvious choice and are deliberate. Movement is compared
+  over everything *outside* a small volatile set (`ts`, `schema`) rather than over a
+  declared set of material fields: a later version adding a touch or catch count then
+  moves the record without anyone remembering to register it, and the two failure
+  directions are not symmetric — an unnecessary append is a visible extra line, while
+  a missed one is a reading nobody stored and nothing can detect afterwards. And the
+  winner is resolved by **file position, not by `ts`**: `$HFIT_NOW` freezes the clock
+  for a whole run and a real clock can step backwards, so a timestamp sort would leave
+  the winner undefined — and in the case that matters could prefer a stale `unstated`
+  over the verdict a human had just declared. An episode with no `closed_at` is
+  refused, matching `beads_read.closed_issues`: without it there is no window for a
+  measure to cover.
+- **`hooks/lib/reconcile.py`** — episode discovery, deliberately not episode
+  *tracking*. One idempotent `reconcile(cwd)` reads the closed issues, classifies each
+  one and offers it to the ledger, and it is safe to run as often as anything cares to
+  run it. That is what makes missing the moment of a close cost nothing: a close made
+  from another terminal, by an editor, or on another machine and arrived over Dolt sync
+  is found on the next pass, with no dependency on a session's state having survived.
+  `is_close_command` tokenises with `shlex` and **never regex-matches**, because the
+  literal text `bd close` appears in echoes, commit messages and heredocs, and a regex
+  would pay for a `bd list` on every one of them — worse, an unbalanced quote must
+  never raise, so an odd shell line degrades to "not a close" rather than to a
+  traceback on a hook. Counts are reported as `new`/`updated`/`unchanged`/`skipped`
+  rather than as a single total, since "nothing moved" and "nothing was readable" are
+  different facts. Refusals extend `beads_read`'s reasons with `not_acknowledged` and
+  `config_changed`, kept apart for the same reason `no_database` and `bd_error` are:
+  consent never given and consent invalidated by a config change need different
+  remedies.
+- **`hooks/lib/beads_write.py`** — a bounded `hfit_*` metadata index on the closed
+  issue, so a verdict reached on one machine reaches the others by `bd`'s own Dolt
+  sync. The ledger stays the store of record; this is an index, and
+  `beads.write_metadata: false` means no `bd` process runs at all. Three behaviours
+  were measured against `bd` rather than assumed: `--set-metadata` **merges** rather
+  than replacing, it works on an already-closed issue, and **a value containing
+  whitespace arrives as two words and is silently truncated** — so lists and dicts are
+  written as compacted JSON and any remaining whitespace collapses to an underscore.
+  An `abacus_*` or undeclared key **raises**; only an environmental failure refuses.
+  That asymmetry is the point: a refusal is a value a caller can ignore, and an ignored
+  one would silently overwrite another tool's cost figures
+  ([ADR-010](adr/010-hook-commands-are-hashed-never-stored.md) is the neighbouring
+  discipline). The prefix check runs over the **whole** key set before consent and
+  before the subprocess, because a per-key check would permit a half-write. An
+  unmeasured value is an absent key and never a `0`: `hfit_hard_touches: 0` would
+  replicate as the most flattering reading available — a fully autonomous episode —
+  with nothing recording that nobody had measured it.
+- **`hooks/scripts/reconcile_hook.py`**, wired to `PostToolUse:Bash` and `Stop` — the
+  two triggers that make discovery continuous. The matcher is what makes the event
+  affordable and the `shlex` predicate is what makes it cheap; `Stop` is unconditional
+  because a stop has no command to inspect, and it is the trigger that catches every
+  close this session did not make. `stop_hook_active` is honoured for cost rather than
+  correctness — this hook emits nothing and can never block a stop, so it cannot cause
+  the loop that flag exists to break. Both emit no response field at all
+  ([ADR-006](adr/006-the-hot-path-is-computational-only.md)): a plugin that measures a
+  harness must not steer it.
+- **`episodes_seen` and `verdict_coverage` are real numbers** in
+  `fitness.py --json`, replacing two not-implemented placeholders. Both are
+  **three-valued**, and the seam between the two zero-shaped cases is the whole of the
+  design. Over an *absent* ledger `episodes_seen: 0` is a correct count — nothing has
+  been reconciled here — while over a ledger that **exists and yields nothing** it is
+  `null` with an `episodes-unreadable` gap, because the file is only ever created by an
+  append that succeeded, so an empty read is a fault on this machine and not a fact
+  about the user's work. The two halves of `verdict_coverage` disagree in the same
+  place and are allowed to: `n: 0` is a count over an absent ledger while
+  `coverage: null` refuses, since a ratio with no denominator is not `0.0` and a `0.0`
+  would send someone looking for a habit problem they do not have. Below
+  `min_verdict_coverage` the report now carries an `unstated-verdict` gap naming the
+  actual percentage beside the required one, because "coverage is low" leaves a reader
+  unable to tell a habit that is nearly there from one that has not started.
+- **`/hfit:outcome`** (`hooks/scripts/outcome.py`,
+  `skills/harness-outcome/SKILL.md`,
+  [`contracts/output/outcome-declaration.md`](contracts/output/outcome-declaration.md))
+  — the only surface that produces a `declared` verdict, the top rung of the ladder,
+  for an issue already closed without one. It exists because verdict coverage cannot be
+  repaired retroactively at the moment of the close: that moment has passed for almost
+  every issue that matters. `--verdict` is narrowed to the four declarable values at
+  the `argparse` boundary, so a mistyped one exits non-zero and names all four rather
+  than recording a verdict nobody chose. The load-bearing property is a negative one no
+  schema can carry — **the verdict comes from the user and is never the model's
+  judgement of how the work went** — so the obligation is stated three times in the
+  skill's prose: an `unstated` episode is honestly excluded from every measure, while an
+  invented `accepted` silently corrupts all of them. `ok` and `recorded` are separate
+  keys because the write and the ledger read-back are separate facts:
+  `recorded: false` beside `ok: true` is an honest partial success the next `Stop` hook
+  finishes, and a consumer must not send the user to redo work that is already stored.
+  `beads.write_metadata` is checked here rather than inherited, because
+  `beads_write.set_metadata` does not honour the toggle and the toggle has to mean no
+  `bd` process at all.
 - **`spec.manifest.yaml`** — the repo as one node in an enterprise-architecture
   graph: what it is, which artefact pillars describe it, which interfaces it
-  offers, and what it depends on. At 0.1.0 that is one inbound interface
-  (`SessionStart`) and four outbound ones (the composition record, the change log,
-  the report CLI, the consent record).
+  offers, and what it depends on. As shipped here that is three inbound interfaces
+  (`SessionStart`, `PostToolUse` and `Stop`) and six outbound ones — the composition
+  record, the change log, the report CLI, the beads metadata index, the outcome
+  declaration and the consent record. An `event:` key is what binds an inbound
+  interface to its hook, so wiring a hook without declaring it fails a test, and so
+  does declaring one that is not wired.
 - **`tests/unit/test_spec_conformance.py`** — the assertions that keep the
   documentation and the software agreeing with each other. It does not check that a
   document is *right*; it checks that a reference resolves. Every ADR number cited
@@ -281,5 +435,6 @@ whose only value is that its numbers can be trusted.
   spurious movement are vacuous has no guards at all. The fixture's docstring now
   records the trap, since every later module compares two trees the same way.
 
-[Unreleased]: https://github.com/thijs-hakkenberg/harness-fitness/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/thijs-hakkenberg/harness-fitness/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/thijs-hakkenberg/harness-fitness/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/thijs-hakkenberg/harness-fitness/releases/tag/v0.1.0

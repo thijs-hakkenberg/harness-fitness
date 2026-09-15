@@ -13,6 +13,13 @@
     "should take well under one, because it reads eight disk sources and a cold page",
     "cache is not an error.",
     "",
+    "`PostToolUse` and `Stop` run the same script, because reconciliation is",
+    "idempotent discovery rather than tracking: a second trigger costs a `bd list`",
+    "and a missed close costs nothing. The `Bash` matcher is what makes the first one",
+    "affordable — unmatched, it would wake on every Read, Edit and Grep. `Stop` gets",
+    "the tighter budget of the two despite doing the same work, because it fires every",
+    "turn rather than only after a close.",
+    "",
     "PreToolUse is deliberately absent, and so are SubagentStop, Notification and",
     "PermissionRequest — see adr/004. abacus already owns the edit hot path with the",
     "only hook whose response can stop a tool call; `tool_decision` and",
@@ -34,6 +41,29 @@
           {
             "type": "command",
             "command": "command -v python3 >/dev/null 2>&1 && python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/snapshot_composition.py\" || python \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/snapshot_composition.py\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v python3 >/dev/null 2>&1 && python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/reconcile_hook.py\" || python \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/reconcile_hook.py\"",
+            "timeout": 20
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v python3 >/dev/null 2>&1 && python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/reconcile_hook.py\" || python \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/reconcile_hook.py\"",
             "timeout": 15
           }
         ]

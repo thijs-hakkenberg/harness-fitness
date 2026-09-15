@@ -15,8 +15,9 @@
 # binding is a field rather than a phrase inside the prose: wiring a hook without
 # declaring it here fails, and so does declaring one that is not wired.
 #
-# This is the 0.1.0 surface: composition inventory only. Three pillars are declared
-# and empty, and the manifest grows an interface per step of the build order.
+# This is the 0.2.0 surface: composition inventory plus episodes and outcomes. Three
+# pillars are declared and empty, and the manifest grows an interface per step of the
+# build order.
 
 name: "harness-fitness"
 description: "Measures what a Claude Code harness is composed of, and how well it performs, per project — so that adding or updating a plugin produces a readable before/after rather than an impression."
@@ -43,6 +44,20 @@ interfaces:
       sla:
         latency_p99_ms: 15000
         availability_pct: 99.0
+    - name: "post-tool-use-close-reconciliation"
+      protocol: event
+      event: PostToolUse
+      schema: "contracts/input/post-tool-use.md — hooks/scripts/reconcile_hook.py, matcher Bash; reads tool_input.command, tokenises it with shlex and reconciles only when it actually closed a beads issue. The matcher is what makes the event affordable and the predicate is what makes it cheap: PostToolUse:Bash fires for every shell call, and the literal text `bd close` appears in echoes, commit messages and heredocs, each of which would otherwise pay for a bd list. Emits no response field at all — see adr/006. The 20 s budget covers one bd list bounded by beads_read.TIMEOUT_SECONDS plus at most beads_write.MAX_EPISODES_PER_RUN writes."
+      sla:
+        latency_p99_ms: 20000
+        availability_pct: 99.0
+    - name: "stop-episode-reconciliation"
+      protocol: event
+      event: Stop
+      schema: "contracts/input/stop.md — hooks/scripts/reconcile_hook.py, the same script as PostToolUse because the work is identical and reconciliation is idempotent discovery rather than tracking. Unconditional, since a Stop has no command to inspect; this is the trigger that catches a close made from another terminal, by an editor, or on another machine and arrived over Dolt sync. Honours stop_hook_active for cost rather than correctness — this hook emits nothing and can never block a stop, so it cannot cause the loop that flag exists to break. Budgeted tighter than PostToolUse at 15 s despite the same work, because it fires every turn rather than only after a close."
+      sla:
+        latency_p99_ms: 15000
+        availability_pct: 99.0
   outbound:
     - name: "composition-record"
       protocol: file
@@ -58,10 +73,22 @@ interfaces:
         availability_pct: 99.0
     - name: "fitness-report"
       protocol: cli
-      schema: "contracts/output/fitness-report.md — hooks/scripts/fitness.py --json; invoked by /hfit:composition and by a human, never by an event. Reports `ok` before anything else, and on a failed read carries no measures, episodes_seen, current, changes or flags key at all — absence is the only encoding that cannot be mistaken for a result, since null is already the legitimate value of a successful read. Does not read stdin and creates nothing, so reporting on an unacknowledged install cannot be the thing that produces the first artefact; see adr/014."
+      schema: "contracts/output/fitness-report.md — hooks/scripts/fitness.py --json; invoked by /hfit:composition and by a human, never by an event. Reports `ok` before anything else, and on a failed read carries no measures, episodes_seen, verdict_coverage, current, changes or flags key at all — absence is the only encoding that cannot be mistaken for a result, since null is already the legitimate value of a successful read. episodes_seen is three-valued for the same reason: 0 over an absent ledger is a count, while null over a ledger that exists and yields nothing is a fault on this machine, and verdict_coverage is null with it. Does not read stdin and creates nothing, so reporting on an unacknowledged install cannot be the thing that produces the first artefact; see adr/014."
       sla:
         latency_p99_ms: 20000
         availability_pct: 95.0
+    - name: "beads-metadata-index"
+      protocol: cli
+      schema: "contracts/output/bd-metadata-write.md — hooks/lib/beads_write.py runs one `bd update <id> --set-metadata k=v …` per episode, merging a bounded set of hfit_* keys onto the closed issue so a verdict reached here reaches the other machines by bd's own Dolt sync. The ledger remains the store of record; this is an index, and beads.write_metadata: false means no bd process at all. An abacus_* or undeclared key raises rather than refusing, because a refusal is a value a caller can ignore and an ignored one silently overwrites another tool's cost figures. An unmeasured value is an absent key, never a zero — a fabricated 0 would replicate as a fact. hfit_model_basis travels beside hfit_env_hash so the refusal adr/007 obliges stays enforceable off this machine."
+      sla:
+        latency_p99_ms: 10000
+        availability_pct: 90.0
+    - name: "outcome-declaration"
+      protocol: cli
+      schema: "contracts/output/outcome-declaration.md — hooks/scripts/outcome.py --issue <id> --verdict <accepted|rejected|abandoned|superseded> [--json]; invoked by /hfit:outcome and by a human, never by an event. The only surface that produces a `declared` verdict basis, the top rung of adr/013's ladder, which is why --verdict is narrowed to the four declarable values at the argparse boundary and why the skill is obliged in prose never to choose one itself: a fabricated declaration is undiscountable. --json is optional here, unlike the fitness report, because the prose default serves a person at a terminal and only the JSON form is contracted. Checks consent and then beads.write_metadata itself — beads_write.set_metadata does not honour the toggle — so a refusal means no bd process ran at all. ok and recorded are separate facts: recorded: false beside ok: true is an honest partial success the next Stop hook finishes, not an error, and a refusal carries no keys_written, recorded or reconcile_reason key at all."
+      sla:
+        latency_p99_ms: 25000
+        availability_pct: 90.0
     - name: "consent-record"
       protocol: cli
       schema: "contracts/output/consent-notice.md — hooks/scripts/acknowledge.py --accept | --show | --revoke, mutually exclusive and required, so a bare invocation exits non-zero from argparse rather than defaulting to the agreeable branch. Writes acknowledged.json holding a fingerprint of the five governing config keys; until it matches, nothing anywhere is written and no path is resolved. --show reports what would be written and writes nothing to say so. See adr/014."
@@ -70,7 +97,7 @@ interfaces:
         availability_pct: 99.0
 
 dependencies:
-  - name: "Claude Code hook lifecycle (SessionStart) — the only trigger at 0.1.0, and the plugin never claims an event whose response can stop a tool call"
+  - name: "Claude Code hook lifecycle (SessionStart, PostToolUse, Stop) — and the plugin never claims an event whose response can stop a tool call"
     contract: "adr/004-there-is-no-pretooluse-hook.md"
   - name: "Claude Code settings and plugin state on disk (settings{,.local}.json, installed_plugins.json, known_marketplaces.json, .mcp.json) — read-only, and the identity authority for every component, because OTEL anonymises local plugins to third-party"
     contract: "contracts/output/composition-record.md"

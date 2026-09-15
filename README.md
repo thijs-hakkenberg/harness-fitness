@@ -2,12 +2,17 @@
 
 Measures what your Claude Code harness is made of, and how well it performs.
 
-> **Status: 0.1.0.** The composition inventory ships: what your harness is made
-> of, a digest identifying it, and a log of every change to it — readable with
-> `/hfit:composition`. **The four measures are not implemented yet**, and the
-> report says so rather than estimating them: `measures` is `null` beside a gap
-> explaining why. Episodes and outcomes arrive in 0.2.0, tokens-per-outcome in
-> 0.3.0. Sections below marked *(not yet)* fill in as each release ships.
+> **Status: 0.2.0.** Two things ship. The **composition inventory** — what your
+> harness is made of, a digest identifying it, and a log of every change to it,
+> readable with `/hfit:composition`. And the **episode layer** — one record per
+> closed beads issue, with an outcome, so the measures have a denominator. You can
+> declare an outcome after the fact with `/hfit:outcome`.
+>
+> **The four measures are still not implemented**, and the report says so rather
+> than estimating them: `measures` is `null` beside a gap explaining why. What did
+> become real in 0.2.0 is `episodes_seen` and `verdict_coverage` — the number the
+> most important measure is gated on. Tokens-per-outcome arrives in 0.3.0.
+> Sections below marked *(not yet)* fill in as each release ships.
 
 ## What it is
 
@@ -53,9 +58,10 @@ inspects your hook configuration. So, precisely:
   of its own. The plugin ships no HTTP client, no provider SDK and no API key,
   and a test asserts it ([ADR-011](adr/011-claude-code-is-the-only-permitted-llm.md)).
 - **No LLM call happens because you installed this.** Every measure is
-  computational. The one optional exception is `/hfit:outcome --infer`, which
-  dispatches a Claude Code subagent using *your* session — never a provider of
-  its own. It is off by default, and turning it on re-asks for your consent.
+  computational, and `/hfit:outcome` as it ships records the verdict *you* give it and
+  never asks a model for one. The one planned exception is `--infer` *(from 1.0.0)*,
+  which would dispatch a Claude Code subagent using *your* session — never a provider
+  of its own. It will be off by default, and turning it on re-asks for your consent.
 - Every artefact is a local file you can read, diff and delete.
 - **Nothing is written at all** until you run `acknowledge.py --accept`.
 
@@ -63,14 +69,15 @@ inspects your hook configuration. So, precisely:
 
 - Claude Code
 - Python 3.9 or newer — stdlib only, no packages to install
-- [`bd`](https://github.com/steveyegge/beads) *(from 0.2.0)* — the episode boundary
+- [`bd`](https://github.com/steveyegge/beads) — the episode boundary. Without it the
+  composition inventory still works; there are simply no episodes to record.
 - [abacus](https://github.com/thijs-hakkenberg/abacus) *(optional, from 0.3.0)* —
   token and commit attribution per episode
 - An OTEL log exporter *(optional, from 0.4.0)* — the autonomy and feedforward
   measures
 
-At 0.1.0 nothing beyond Claude Code and Python is needed: the composition
-inventory is read from your settings files and plugin directories.
+Nothing beyond Claude Code and Python is needed for the composition inventory: it
+is read from your settings files and plugin directories, with no subprocess at all.
 
 ## Install
 
@@ -115,8 +122,8 @@ Open a session in a project and run:
 ```
 
 Which reports the digest identifying your harness, the eight-bucket
-feedforward/feedback profile, and every recorded change to it. Or read the JSON
-directly:
+feedforward/feedback profile, every recorded change to it, and how many episodes
+here state an outcome. Or read the JSON directly:
 
 ```bash
 python3 ~/.claude/plugins/marketplaces/harness-fitness/hooks/scripts/fitness.py --json
@@ -126,6 +133,30 @@ Check `ok` before anything else. A refused read carries **no** result keys at al
 — that absence is deliberate, because `null` is the legitimate value of a
 *successful* read at this version.
 
+### And state an outcome
+
+An **episode** is one closed beads issue. The ledger fills in on its own, but almost
+every episode arrives `unstated`, because `bd`'s default close reason is the literal
+string `"Closed"` and that says nothing about whether the work landed. Two ways to fix
+that, in order of preference:
+
+```bash
+bd close <id> --reason "accepted: the retry path works now"
+```
+
+The `accepted:`, `rejected:`, `abandoned:` and `superseded:` prefixes are what make an
+outcome *structured* rather than guessed at. For an issue already closed without one:
+
+```
+/hfit:outcome
+```
+
+Which declares the verdict after the fact. That ranks **above** a prefix rather than
+merely repairing it — a declaration is the only basis that means a person said so.
+The verdict is yours; the skill is under standing instructions never to choose one for
+you, because an invented `accepted` silently corrupts every measure while an honest
+`unstated` is merely excluded from them.
+
 ### What gets written, and where
 
 ```
@@ -134,7 +165,18 @@ Check `ok` before anything else. A refused read carries **no** result keys at al
   projects/<project-slug>/
     compositions/<digest12>.json       # one per composition ever seen; immutable
     changes.jsonl                      # one line per moment the digest moved
+    episodes.jsonl                     # one line per reading of a closed issue
 ```
+
+`episodes.jsonl` is **append-only on movement**: a record is never rewritten, and a
+second reading of the same issue is appended beside the first, with the last append
+winning. That is what lets a verdict you declare today replace the `unstated` one
+recorded last week, without losing the fact that it was `unstated` then.
+
+A bounded set of `hfit_*` keys is also written onto the closed beads issue itself, so
+a verdict reached here syncs to your other machines the way abacus's figures do. The
+ledger stays the store of record; that is an index, and it never touches an `abacus_*`
+key.
 
 Plain files, mode 0600 in a 0700 directory. Read them, diff them, delete them.
 `ledger.in_repo: true` in `~/.claude/harness-fitness/config.json` relocates the
@@ -156,20 +198,29 @@ above.
 
 ## What runs
 
-At 0.1.0 there is exactly **one** hook:
+Three hooks:
 
 | event | script | budget | what it does |
 |---|---|---|---|
 | `SessionStart` | `snapshot_composition.py` | 15s | reads your settings layers and enabled plugin directories, computes the digest, writes the composition file if it is new, and appends to `changes.jsonl` if the digest moved |
+| `PostToolUse:Bash` | `reconcile_hook.py` | 20s | tokenises the command with `shlex` and, only if it actually closed a beads issue, reconciles the episode ledger |
+| `Stop` | `reconcile_hook.py` | 15s | the same reconciliation, unconditionally — this is what catches a close made in another terminal, by an editor, or on another machine |
 
-It **emits no `additionalContext`** — a `SessionStart` response can inject text
-into every session's context window, and a tool whose job is to measure what the
-harness costs must not become a line item in that cost. Everything it learns goes
-to a file, read on demand.
+Reconciliation is **discovery, not tracking**: it is idempotent and safe to run as
+often as anything cares to, so missing the moment of a close costs nothing. The
+`PostToolUse` matcher is what makes the event affordable, and the `shlex` predicate
+is what makes it cheap — the literal text `bd close` turns up in echoes, commit
+messages and heredocs, none of which should pay for a `bd list`.
 
-It also **fails open**: a corrupt payload, an unreadable ledger or a read-only
-filesystem exits 0 with empty stdout. A measurement tool that can break your
-session is not worth its measurements.
+None of them **emits any response field** — no `additionalContext`, no permission
+decision, empty stdout. A `SessionStart` response can inject text into every
+session's context window, and a tool whose job is to measure what the harness costs
+must not become a line item in that cost. Everything they learn goes to a file, read
+on demand.
+
+They also **fail open**: a corrupt payload, a missing `bd`, an unreadable ledger or a
+read-only filesystem exits 0 with empty stdout. A measurement tool that can break
+your session is not worth its measurements.
 
 There is deliberately **no `PreToolUse` hook**, and no `SubagentStop`,
 `Notification` or `PermissionRequest` hook. Each one this plugin adds enlarges the
@@ -184,7 +235,7 @@ harness it is trying to measure.
 | `ledger.in_repo` | `false` | write the per-project ledger to `$CLAUDE_PROJECT_DIR/.harness-fitness/` instead |
 | `otel.enabled` | `true` | read the OTEL log at all *(from 0.4.0)* |
 | `otel.tail_bytes` | `4194304` | how much of the log tail to scan |
-| `beads.write_metadata` | `true` | write `hfit_*` keys onto closed beads issues *(from 0.2.0)* |
+| `beads.write_metadata` | `true` | write `hfit_*` keys onto closed beads issues. `false` means no `bd` write process runs at all; the local ledger is unaffected, since it is the store of record and the metadata is only a cross-machine index |
 | `inference.enabled` | `false` | permit the opt-in inferential verdict *(from 1.0.0)* |
 | `events_retention_days` | `30` | age-prune distilled events |
 | `min_verdict_coverage` | `0.6` | below this, tokens-per-outcome is refused rather than reported |
@@ -209,15 +260,20 @@ misuse it is built to prevent:
   and quoting it as one is a misuse of the number.
 - **Small N.** Real projects produce few episodes per composition, and a
   comparison below `min_episodes_per_digest` is refused rather than reported.
-- **The four measures are not implemented at 0.1.0.** The report says so; it does
-  not estimate them.
+- **The four measures are not implemented yet.** The report says so; it does not
+  estimate them. `episodes_seen` and `verdict_coverage` are real from 0.2.0, and they
+  are the inputs the first measure is gated on — so the gate is measurable before the
+  number it gates exists, rather than after.
 - **OTEL anonymises local plugins** — 329 of 428 observed `plugin_loaded` events
   report `plugin.name: "third-party"`. Disk is therefore the identity authority,
   and measurement happens at *composition* granularity. Per-component blame is out
   of reach, and this plugin does not promise it.
-- **Verdict coverage will depend on a human habit** *(from 0.2.0)* — closing an
-  issue with `--reason "accepted: …"`. Most issues today close with bd's default
-  `"Closed"`, which reads as no verdict stated, not as success.
+- **Verdict coverage depends on a human habit** — closing an issue with
+  `--reason "accepted: …"`. Measured on the author's own machine: 10 of 12 closed
+  issues carry bd's default `"Closed"`, which reads as no verdict stated, not as
+  success. `/hfit:outcome` exists because the habit cannot be applied retroactively —
+  the moment of the close has already passed for nearly every issue that matters — but
+  a declaration is still a human action, and no amount of code turns it into one.
 
 ## Development
 
