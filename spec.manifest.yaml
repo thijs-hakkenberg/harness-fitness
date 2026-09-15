@@ -15,8 +15,9 @@
 # binding is a field rather than a phrase inside the prose: wiring a hook without
 # declaring it here fails, and so does declaring one that is not wired.
 #
-# This is the 0.1.0 surface: composition inventory only. Three pillars are declared
-# and empty, and the manifest grows an interface per step of the build order.
+# This is the 0.2.0 surface: composition inventory plus episodes and outcomes. Three
+# pillars are declared and empty, and the manifest grows an interface per step of the
+# build order.
 
 name: "harness-fitness"
 description: "Measures what a Claude Code harness is composed of, and how well it performs, per project — so that adding or updating a plugin produces a readable before/after rather than an impression."
@@ -96,7 +97,7 @@ interfaces:
         availability_pct: 99.0
 
 dependencies:
-  - name: "Claude Code hook lifecycle (SessionStart) — the only trigger at 0.1.0, and the plugin never claims an event whose response can stop a tool call"
+  - name: "Claude Code hook lifecycle (SessionStart, PostToolUse, Stop) — and the plugin never claims an event whose response can stop a tool call"
     contract: "adr/004-there-is-no-pretooluse-hook.md"
   - name: "Claude Code settings and plugin state on disk (settings{,.local}.json, installed_plugins.json, known_marketplaces.json, .mcp.json) — read-only, and the identity authority for every component, because OTEL anonymises local plugins to third-party"
     contract: "contracts/output/composition-record.md"

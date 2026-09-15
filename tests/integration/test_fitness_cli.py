@@ -471,9 +471,10 @@ class TestTheCliContract:
         assert "--not-a-flag" in result.stderr
 
     def test_it_refuses_to_print_anything_but_json_for_now(self, run_cli, recorded):
-        # `--json` is mandatory at 0.1.0. A default human format would be a second
-        # output contract to keep in step with the first, and every consumer here
-        # is a skill.
+        # `--json` is mandatory on this surface. A default human format would be a
+        # second output contract to keep in step with the first, and every consumer
+        # here is a skill. `outcome.py` diverges deliberately — its prose form is
+        # explicitly uncontracted, because a person types that one by hand.
         result = run_cli(SCRIPT, (), cwd=recorded.project)
 
         assert result.returncode != 0
