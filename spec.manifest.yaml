@@ -62,6 +62,12 @@ interfaces:
       sla:
         latency_p99_ms: 20000
         availability_pct: 95.0
+    - name: "beads-metadata-index"
+      protocol: cli
+      schema: "contracts/output/bd-metadata-write.md — hooks/lib/beads_write.py runs one `bd update <id> --set-metadata k=v …` per episode, merging a bounded set of hfit_* keys onto the closed issue so a verdict reached here reaches the other machines by bd's own Dolt sync. The ledger remains the store of record; this is an index, and beads.write_metadata: false means no bd process at all. An abacus_* or undeclared key raises rather than refusing, because a refusal is a value a caller can ignore and an ignored one silently overwrites another tool's cost figures. An unmeasured value is an absent key, never a zero — a fabricated 0 would replicate as a fact. hfit_model_basis travels beside hfit_env_hash so the refusal adr/007 obliges stays enforceable off this machine."
+      sla:
+        latency_p99_ms: 10000
+        availability_pct: 90.0
     - name: "consent-record"
       protocol: cli
       schema: "contracts/output/consent-notice.md — hooks/scripts/acknowledge.py --accept | --show | --revoke, mutually exclusive and required, so a bare invocation exits non-zero from argparse rather than defaulting to the agreeable branch. Writes acknowledged.json holding a fingerprint of the five governing config keys; until it matches, nothing anywhere is written and no path is resolved. --show reports what would be written and writes nothing to say so. See adr/014."
