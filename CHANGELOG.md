@@ -13,6 +13,35 @@ contract file records its own history so a consumer can tell what it may rely on
 
 ### Added
 
+- **`hooks/lib/beads_read.py`** — read-only access to the beads database, which is
+  where the episode population comes from. Three wire shapes were measured against
+  `bd` 1.1.2 on a real database rather than inferred: `bd list --all --json` prints a
+  bare array with no `issues` wrapper, `bd show <id> --json` prints a
+  single-element array rather than the object, and a project with no database exits
+  **1 with empty stdout**. That last one is the reason the module exists in this
+  shape: a reader mapping non-zero to "no issues" would report a project with a
+  hundred closed episodes as a project with none, so every function returns
+  `issues: None` on failure and **never `[]`**. `no_database` and `bd_error` are named
+  apart because one is a benign sentence and the other is a defect, and a single
+  reason covering both would be wrong half the time.
+- **`hooks/lib/verdict.py`** — the verdict ladder
+  `declared > structured > lexical > inferential > unstated`, which supplies the
+  denominator abacus does not have: abacus records lifecycle and never outcome. Each
+  answer carries the *basis* it was reached by, because the five ways of learning an
+  outcome are not equally trustworthy and must not be averaged into one claim.
+  `unstated` is the dominant real case — 10 of 12 closed issues measured here carry
+  `bd`'s default `close_reason` of exactly `"Closed"` — and it is not a failure:
+  counted as a rejection it reports a working harness as a failing one, counted as a
+  success it puts unexamined work in the passing denominator, so it is excluded from
+  both and published as a coverage shortfall via `verdict_coverage`
+  ([ADR-008](adr/008-verdict-coverage-gates-tokens-per-outcome.md)). The lexicon
+  refuses rather than guesses: text pointing both ways is `unstated` with
+  `reason: "ambiguous"`, and negation is handled explicitly because `"not working"`
+  contains `"working"` — the single most damaging error available here, since it
+  moves an episode into the passing count. `inferential` is attempted *after* the
+  lexical read ([ADR-013](adr/013-the-inferential-verdict-is-a-backfill-tool.md)), so
+  switching inference on can never weaken the basis of an episode that already had a
+  better one.
 - **`spec.manifest.yaml`** — the repo as one node in an enterprise-architecture
   graph: what it is, which artefact pillars describe it, which interfaces it
   offers, and what it depends on. At 0.1.0 that is one inbound interface
