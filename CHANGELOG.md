@@ -11,6 +11,17 @@ contract file records its own history so a consumer can tell what it may rely on
 
 ## [Unreleased]
 
+### Added
+
+- [ADR-017](adr/017-mutation-testing-does-not-substitute-for-a-red-phase.md) —
+  mutation testing does not substitute for a red phase. Records a lapse in 0.2.0's
+  step 3, where thirty hook integration tests were written after their implementation
+  and a mutation pass was treated as having discharged the missing red phase. The
+  rebuttal is that a red phase also proves a test asserts the *intended* rather than
+  the *implemented* behaviour, and a mutation pass cannot separate those: a test
+  written from the spec and a test written from the code kill the same mutants.
+  `CONTRIBUTING.md` §1 is unchanged — the rule was not false, the practice lapsed.
+
 ## [0.2.0] — 2026-09-15
 
 The episode layer. 0.1.0 could say what the harness was composed of; it had no way
