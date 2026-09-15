@@ -8,7 +8,7 @@ Stdout of one command. No MCP server, no network, no file written.
 python3 "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/fitness.py" --json
 ```
 
-`--json` is **required** at 0.1.0. A default human format would be a second output
+`--json` is **required**. A default human format would be a second output
 contract to keep in step with this one, and every consumer at this version is a skill
 that calls `json.loads` on stdout.
 
@@ -28,13 +28,13 @@ session.
 
 ## A successful read
 
-Exactly these ten keys, in this order. `ok` is first, deliberately.
+Exactly these eleven keys, in this order. `ok` is first, deliberately.
 
 ```json
 {
   "ok": true,
   "schema": 1,
-  "plugin_version": "0.1.0",
+  "plugin_version": "0.2.0",
   "project": "/Users/you/projects/repos/Something",
   "current": {
     "digest": "b79079db273c",
@@ -52,7 +52,13 @@ Exactly these ten keys, in this order. `ok` is first, deliberately.
      "diff_basis": "baseline", "added": [], "removed": [], "changed": [],
      "profile_delta": {}}
   ],
-  "episodes_seen": null,
+  "episodes_seen": 2,
+  "verdict_coverage": {
+    "coverage": 0.5, "n": 2, "stated": 1,
+    "by_basis": {"declared": 0, "structured": 1, "lexical": 0,
+                 "inferential": 0, "unstated": 1},
+    "reason": null
+  },
   "measures": null,
   "gaps": [
     {"kind": "measures-unavailable",
@@ -62,7 +68,7 @@ Exactly these ten keys, in this order. `ok` is first, deliberately.
 }
 ```
 
-| key | at 0.1.0 |
+| key | at 0.2.0 |
 |---|---|
 | `ok` | `true` on a successful read. **Read this first.** |
 | `schema` | report schema, `1`. |
@@ -70,22 +76,48 @@ Exactly these ten keys, in this order. `ok` is first, deliberately.
 | `project` | the directory whose ledger was read. |
 | `current` | the composition in force, or `null` with a gap. |
 | `changes` | the change log verbatim, oldest first. See `composition-record.md`. |
-| `episodes_seen` | **`null`.** No episode store exists until 0.2.0. |
+| `episodes_seen` | how many episodes this project's ledger holds — **three-valued**, see below. |
+| `verdict_coverage` | the share of those episodes whose outcome is stated, plus the basis mix. `null` when the ledger was unreadable. |
 | `measures` | **`null`.** The measure layer arrives in 0.3.0. |
 | `gaps[]` | `{kind, reason}` — a kind for a skill to branch on, a sentence for a person to act on. |
 | `flags[]` | conditions affecting the whole read. Empty here. |
 
 `plugin_version` is not decoration. A report gets pasted into an issue and read weeks
 later, and without it the reader cannot tell whether a `null` measure means "not
-implemented at that version" or "unavailable on that machine" — and at 0.1.0 almost
-every measure is the former.
+implemented at that version" or "unavailable on that machine" — and at 0.2.0 the four
+measures are still the former.
+
+### `episodes_seen` is three-valued
+
+Counted over `ledger.latest_episodes` — the **last reading of each issue**, not raw
+lines. The ledger is append-only *on movement*, so one issue holds several readings
+when a verdict is declared after the fact, and counting lines would report a project
+that revisits its outcomes as one that did twice the work.
+
+| value | when | why not the other answer |
+|---|---|---|
+| a positive count | the ledger holds readings | — |
+| `0` | the ledger file is **absent**, with `no-episodes-recorded` | `0` is honest: the field counts what the ledger holds, and nothing has been reconciled here. `null` would refuse a question that has an answer. |
+| `null` | the ledger file **exists** and yielded nothing, with `episodes-unreadable` | a ledger file is created only by an append that succeeded, so an empty read is a fault on this machine. `0` would put that fault inside a number about the user's work, where nothing downstream could separate the two. |
+
+`verdict_coverage` splits along the same seam, and its two halves disagree — which is
+the clearest statement of the rule anywhere in this system. Over an **absent** ledger
+`n` is `0` and that is a correct count, while `coverage` is `null`, because a ratio over
+no denominator is not `0.0`; a `0.0` there would send someone looking for a habit
+problem they do not have. Over an **unreadable** ledger the whole value is `null`:
+computing coverage over the empty list would answer `reason: "no_episodes"`, a cause
+the read never established.
+
+`by_basis` travels with the number because the headline cannot show it. 60% built from
+`structured` prefixes is a different fact from 60% built by the `lexical` classifier,
+and only the first is worth trusting a delta on (ADR-013).
 
 ### Why `null` and not `0` or `{}`
 
-- `episodes_seen: 0` would assert that we looked at the user's closed issues and
-  found none. That is a claim about their work. There is no episode store to look in.
 - `measures: {}` would say the measure layer ran and produced nothing.
 - `profile: {}` on an unreadable record would describe a harness with no components.
+- `verdict_coverage.coverage: 0.0` over no episodes would describe a bad habit rather
+  than an absent history.
 
 Unknown is never zero, and every `null` is paired with a `gaps[]` entry that says why.
 A `kind` with an empty `reason` is a contract violation — it forces the skill to
@@ -105,14 +137,14 @@ The two hashes have different widths on purpose and must not be "fixed" to match
 
 ## A failed read
 
-**Six keys. No `current`, no `changes`, no `episodes_seen`, no `measures`, no
-`flags`.**
+**Six keys. No `current`, no `changes`, no `episodes_seen`, no `verdict_coverage`, no
+`measures`, no `flags`.**
 
 ```json
 {
   "ok": false,
   "schema": 1,
-  "plugin_version": "0.1.0",
+  "plugin_version": "0.2.0",
   "project": "/Users/you/projects/repos/Something",
   "reason": "not_acknowledged",
   "gaps": [{"kind": "not-acknowledged", "reason": "Nothing has been recorded yet: …"}]
@@ -125,10 +157,13 @@ gap's `reason` is the sentence a person reads, and it names the command to run.
 ### Absence is the encoding
 
 This is the one shape a caller cannot misread, and it is worth stating why nothing
-weaker would do. `null` is already spoken for: at 0.1.0 it is the *legitimate* value
-of `measures` on a **successful** read. A failed read that also said `measures: null`
-would be indistinguishable from a successful one, and a skill would report "no
-measures available" where the honest answer is "consent was never given".
+weaker would do. `null` is already spoken for: it is the *legitimate* value of
+`measures` on a **successful** read, and since 0.2.0 also of `episodes_seen` and
+`verdict_coverage` when the ledger could not be read. A failed read that also said
+`measures: null` would be indistinguishable from a successful one, and a skill would
+report "no measures available" where the honest answer is "consent was never given".
+`0` is spoken for too — an absent ledger legitimately counts `0` episodes — so a
+zeroed failure would read as a project with no history rather than as a refusal.
 
 `changes` belongs in the same list for the same reason: an empty change log is a real
 and legitimate state of a successful read, so emitting `[]` on a failure would assert
@@ -137,7 +172,7 @@ and legitimate state of a successful read, so emitting `[]` on a failure would a
 **So a consumer must branch on `ok` before touching any other key**, and must treat a
 missing key as "not read" rather than as "empty".
 
-## Gap kinds at 0.1.0
+## Gap kinds at 0.2.0
 
 | kind | `ok` | means |
 |---|---|---|
@@ -145,15 +180,17 @@ missing key as "not read" rather than as "empty".
 | `config-changed` | `false` | a governing config key moved since acknowledgement; recording has stopped until re-acknowledged. |
 | `no-composition-recorded` | `true` | acknowledged, but no session has started in this project yet. Not a failure. |
 | `unresolved-composition` | `true` | the digest is known from the change log but its record file could not be read. `digest` is kept; everything from the record is `null`. |
+| `no-episodes-recorded` | `true` | acknowledged and reconciling, but nothing has been closed in this project yet. `episodes_seen` is `0`. Not a failure. |
+| `episodes-unreadable` | `true` | the ledger file exists and yielded no records — a fault on this machine. `episodes_seen` **and** `verdict_coverage` are both `null`. |
+| `unstated-verdict` | `true` | coverage is below `min_verdict_coverage`. The reason interpolates both percentages; tokens per outcome stays refused until it rises (ADR-008). |
 | `measures-unavailable` | `true` | always present at this version. |
 
 `not-acknowledged` is the highest-value message in the plugin. Without it the
 first-run experience is `/hfit:composition` printing nothing, which reads as a broken
 plugin rather than as a decision the user has not yet made.
 
-Kinds are additive across versions: `unstated-verdict`, `no-declared-failure-modes`,
-`otel-unavailable`, `env-hash-mixed` and `composition-unstable` arrive with the
-measures they qualify. **A consumer must tolerate an unrecognised kind** — printing
+Kinds are additive across versions: `no-declared-failure-modes`, `otel-unavailable`,
+`env-hash-mixed` and `composition-unstable` arrive with the measures they qualify. **A consumer must tolerate an unrecognised kind** — printing
 its `reason` is always correct — rather than switching exhaustively.
 
 ## Exit codes and stderr
@@ -183,21 +220,29 @@ traceback. A skill parses it.
 
 ## SemVer
 
-- **Contract version:** 1.0.0
+- **Contract version:** 1.1.0
 - **Deprecation policy:** adding a key, or a new `gaps[]` kind, is a **minor** bump —
   consumers tolerate unknown kinds by contract. Removing a key, retyping one, or
   changing what `ok` gates is **major** and requires a `schema` increment. Turning a
   documented `null` into a number is **minor** (it is the promised direction of
   travel); turning a number into `null` is **major**.
+- 1.1.0 is that policy exercised in both halves at once: `verdict_coverage` and three
+  gap kinds were added, and `episodes_seen`'s documented `null` became a number. Both
+  are minor. Note what did **not** happen — `episodes_seen` did not become
+  *unconditionally* numeric: it gained `0` and kept `null` for the unreadable case, and
+  a consumer that had learned to expect `null` still meets it.
 - Populating `measures` in 0.3.0 is a minor bump under this policy. The `null`s here
   are placeholders whose shape is already fixed: a measure will be an object with its
   own value, basis and refusal sentinel, never a bare number.
 
 ## SLA + telemetry
 
-- **Latency:** interactive. Two file reads and a JSONL parse; no subprocess, no `bd`,
-  no OTEL scan on this path at 0.1.0.
+- **Latency:** interactive. Three file reads and two JSONL parses — the episode ledger
+  is read on this path from 0.2.0, and it is still only a read. **No subprocess, no
+  `bd`, no OTEL scan**, at any version: reconciliation is what runs `bd`, and it runs
+  from a hook.
 - **Availability:** total. Every documented failure exits 0 with a report; an
-  unreadable ledger degrades to `ok: true` with `no-composition-recorded`.
+  unreadable composition record degrades to `ok: true` with `unresolved-composition`,
+  and an unreadable episode ledger to `ok: true` with `episodes-unreadable`.
 - **Side effects:** none. Asserted, not assumed.
 - **Telemetry:** none. No upload, no endpoint, no network call of any kind.
