@@ -129,7 +129,8 @@ Returned as `{"ok": false, "reason": …, "keys_written": null}`.
 
 | reason | meaning |
 |---|---|
-| `not_acknowledged` | consent absent or its fingerprint moved (ADR-014) |
+| `not_acknowledged` | consent has never been given (ADR-014) |
+| `config_changed` | consent was given, then a governing key moved — separate because the remedy is a re-acknowledgement, where `not_acknowledged`'s is a first one |
 | `writes_disabled` | `beads.write_metadata` is off |
 | `no_issue_id` | the episode names no issue |
 | `nothing_to_write` | every indexable value was `None` |
@@ -146,6 +147,52 @@ unknown — and `0` would be a stronger claim than the evidence supports.
 `no_database` and `bd_error` are separate because one is a project that does not use
 beads and the other is a defect. Reporting them alike would make the benign case
 indistinguishable from the one worth investigating.
+
+## The batch, and the two rules that bound it
+
+A reconcile offers every episode that moved, and the first reconcile of a project with a
+long closed backlog offers the whole backlog at once. That batch runs behind a hook with
+a 15–20 s budget, so `write_episodes` bounds it two ways. Neither works without the
+other.
+
+**A cap** bounds the healthy case, where a write costs tens of milliseconds and twenty
+are nothing: `MAX_EPISODES_PER_RUN = 20`, newest close first so the most recently useful
+episodes are the ones indexed.
+
+It is deliberately **not a config key.** The cap exists to keep a timeout honest, and a
+bound with that job cannot be user-tunable without the timeout becoming a lie: raised to
+500, every `Stop` would be a hook killed partway through, leaving exactly the partial
+index the cap exists to prevent. It would also not be a *governing* key, so doing so
+would not even cost a re-acknowledgement to make it visible.
+
+**Halting on an environmental failure** bounds the pathological case, which the cap alone
+does not — twenty timeouts at the read timeout each exceed a `Stop` budget by an order of
+magnitude however small the cap is. Every reason inherited from `beads_read.REASONS` is a
+property of the *project* (no database, no `bd`, a hung one), so once one write fails that
+way every remaining write is already known to fail. A per-episode refusal (`no_issue_id`,
+`nothing_to_write`) is a property of one record and does **not** halt — otherwise a single
+malformed row arriving over Dolt sync would stop a project's index from ever updating
+again.
+
+### The known residual
+
+**Episodes past the cap are not written and not retried.** A later reconcile finds their
+ledger records unchanged and does not offer them again, so they stay unindexed in beads
+while remaining complete in `episodes.jsonl`.
+
+This is stated rather than fixed because the ledger is the store of record and this is an
+index: an unindexed episode is invisible from another machine and fully present on this
+one. A retry queue would be a second piece of state to keep consistent with the ledger,
+for a case that arises once per project. `write_episodes` returns `capped: true` so a
+caller can tell, and a batch's counts distinguish the two shapes of incompleteness:
+
+| `ok` | `reason` | meaning |
+|---|---|---|
+| `false` | a gate reason | nothing ran; **every** count is `null`, `capped` included — `false` would read as "nothing was dropped" about a run that never happened |
+| `true` | `null` | the whole batch was attempted |
+| `true` | an environmental reason | the run happened and stopped; the counts are real, because the number written before a halt is genuinely observed |
+
+`ok` therefore says *the counts can be believed*, not that every write succeeded.
 
 ## Ordering and safety
 

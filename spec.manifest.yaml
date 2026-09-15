@@ -43,6 +43,20 @@ interfaces:
       sla:
         latency_p99_ms: 15000
         availability_pct: 99.0
+    - name: "post-tool-use-close-reconciliation"
+      protocol: event
+      event: PostToolUse
+      schema: "contracts/input/post-tool-use.md — hooks/scripts/reconcile_hook.py, matcher Bash; reads tool_input.command, tokenises it with shlex and reconciles only when it actually closed a beads issue. The matcher is what makes the event affordable and the predicate is what makes it cheap: PostToolUse:Bash fires for every shell call, and the literal text `bd close` appears in echoes, commit messages and heredocs, each of which would otherwise pay for a bd list. Emits no response field at all — see adr/006. The 20 s budget covers one bd list bounded by beads_read.TIMEOUT_SECONDS plus at most beads_write.MAX_EPISODES_PER_RUN writes."
+      sla:
+        latency_p99_ms: 20000
+        availability_pct: 99.0
+    - name: "stop-episode-reconciliation"
+      protocol: event
+      event: Stop
+      schema: "contracts/input/stop.md — hooks/scripts/reconcile_hook.py, the same script as PostToolUse because the work is identical and reconciliation is idempotent discovery rather than tracking. Unconditional, since a Stop has no command to inspect; this is the trigger that catches a close made from another terminal, by an editor, or on another machine and arrived over Dolt sync. Honours stop_hook_active for cost rather than correctness — this hook emits nothing and can never block a stop, so it cannot cause the loop that flag exists to break. Budgeted tighter than PostToolUse at 15 s despite the same work, because it fires every turn rather than only after a close."
+      sla:
+        latency_p99_ms: 15000
+        availability_pct: 99.0
   outbound:
     - name: "composition-record"
       protocol: file

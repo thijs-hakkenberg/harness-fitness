@@ -27,8 +27,11 @@ An absent key is the only honest encoding, and it is also the one a later step c
 fill in.
 """
 
+import json
+
 import pytest
 
+import beads_read
 import beads_write
 import consent
 import hfit_config
@@ -529,3 +532,263 @@ def test_an_episode_with_nothing_knowable_writes_no_command(
     assert result["ok"] is False
     assert result["reason"] == "nothing_to_write"
     assert stub_bin.calls("bd") == []
+
+
+# --------------------------------------------------------------------------------
+# Many episodes in one run, and the bound that keeps a hook inside its budget
+# --------------------------------------------------------------------------------
+#
+# The first reconcile of a project with a closed backlog offers *every* issue as
+# `new`. An unbounded loop would put one `bd update` per closed issue on a `Stop`
+# hook with a 15 s budget, be killed partway through, and leave a partial index
+# with nothing anywhere recording which half landed.
+#
+# Two rules bound it, and neither works without the other. The cap bounds the
+# healthy case, where a write costs tens of milliseconds and twenty of them are
+# nothing. The halt-on-environmental-failure rule bounds the pathological one,
+# where a single write can cost `beads_read.TIMEOUT_SECONDS` — twenty of those
+# would exceed the budget by an order of magnitude however small the cap was.
+
+
+def all_written(stub_bin):
+    """The issue ids of every `bd update` the run made, in order."""
+    return [argv[1] for argv in stub_bin.calls("bd")]
+
+
+def episodes(count, first=0):
+    """`count` episodes, closed one minute apart, oldest first."""
+    return [
+        episode(
+            issue_id="Proj-%03d" % index,
+            closed_at="2026-09-15T08:%02d:00Z" % (index % 60),
+        )
+        for index in range(first, first + count)
+    ]
+
+
+def test_every_episode_offered_is_indexed(stub_bin, accepted, proj):
+    stub_bin.on("bd", ["update"], rc=0)
+
+    result = beads_write.write_episodes(proj, episodes(3), cfg=accepted)
+
+    assert result["ok"] is True
+    assert result["written"] == 3
+    assert sorted(all_written(stub_bin)) == ["Proj-000", "Proj-001", "Proj-002"]
+
+
+def test_no_more_than_the_cap_reaches_bd_in_one_run(stub_bin, accepted, proj):
+    stub_bin.on("bd", ["update"], rc=0)
+
+    result = beads_write.write_episodes(
+        proj, episodes(beads_write.MAX_EPISODES_PER_RUN + 5), cfg=accepted
+    )
+
+    assert len(stub_bin.calls("bd")) == beads_write.MAX_EPISODES_PER_RUN
+    assert result["written"] == beads_write.MAX_EPISODES_PER_RUN
+
+
+def test_the_episodes_kept_when_the_cap_bites_are_the_newest_closed(
+    stub_bin, accepted, proj
+):
+    """Which ones get dropped is a choice, so it is made deliberately. The newest
+    closes are the ones a report is about to be run over; the far end of an old
+    backlog is the least likely to be looked at."""
+    stub_bin.on("bd", ["update"], rc=0)
+    many = episodes(beads_write.MAX_EPISODES_PER_RUN + 3)
+
+    beads_write.write_episodes(proj, many, cfg=accepted)
+
+    newest = sorted(many, key=lambda record: record["closed_at"], reverse=True)
+    expected = [record["issue_id"] for record in newest[: beads_write.MAX_EPISODES_PER_RUN]]
+    assert sorted(all_written(stub_bin)) == sorted(expected)
+
+
+def test_a_capped_run_says_that_it_was_capped(stub_bin, accepted, proj):
+    """Otherwise the episodes past the cap are silently unindexed: a later
+    reconcile reports them `unchanged`, so nothing ever offers them again."""
+    stub_bin.on("bd", ["update"], rc=0)
+
+    result = beads_write.write_episodes(
+        proj, episodes(beads_write.MAX_EPISODES_PER_RUN + 1), cfg=accepted
+    )
+
+    assert result["capped"] is True
+
+
+def test_a_capped_run_counts_what_it_attempted_and_not_what_it_was_offered(
+    stub_bin, accepted, proj
+):
+    """`episodes` is the size of the run, not the size of the batch. The caller
+    already knows how many it offered; what it cannot know is how many the cap let
+    through, and reporting the offered figure beside a `written` bounded by the cap
+    would read as `MAX_EPISODES_PER_RUN` successes out of more attempts — a run that
+    partly failed, rather than one that was deliberately bounded."""
+    stub_bin.on("bd", ["update"], rc=0)
+
+    result = beads_write.write_episodes(
+        proj, episodes(beads_write.MAX_EPISODES_PER_RUN + 3), cfg=accepted
+    )
+
+    assert result["episodes"] == beads_write.MAX_EPISODES_PER_RUN
+    assert result["written"] == beads_write.MAX_EPISODES_PER_RUN
+    assert result["refused"] == 0
+
+
+def test_a_run_inside_the_cap_is_not_reported_as_capped(stub_bin, accepted, proj):
+    stub_bin.on("bd", ["update"], rc=0)
+
+    result = beads_write.write_episodes(proj, episodes(2), cfg=accepted)
+
+    assert result["capped"] is False
+
+
+def test_the_cap_is_a_constant_and_not_a_setting(stub_bin, accepted, proj):
+    """A bound that exists to keep a hook inside its timeout cannot be tunable
+    without the timeout becoming a lie: a user who set it to 500 would turn every
+    `Stop` into a hook killed partway through, leaving the partial index this cap
+    exists to prevent. It is also not a governing config key, so making it one
+    would not even cost a re-acknowledgement to notice."""
+    assert isinstance(beads_write.MAX_EPISODES_PER_RUN, int)
+    assert "max_episodes" not in json.dumps(hfit_config.DEFAULTS)
+
+
+# --------------------------------------------------------------------------------
+# Halting: the difference between one bad episode and a bad environment
+# --------------------------------------------------------------------------------
+
+
+def test_an_episode_the_writer_refuses_does_not_stop_the_others(
+    stub_bin, accepted, proj
+):
+    """`no_issue_id` is a property of one record. Stopping on it would let a single
+    malformed row in a Dolt-synced database prevent every later episode in the
+    project from ever being indexed."""
+    stub_bin.on("bd", ["update"], rc=0)
+    offered = episodes(2) + [episode(issue_id=None)]
+
+    result = beads_write.write_episodes(proj, offered, cfg=accepted)
+
+    assert result["ok"] is True
+    assert result["written"] == 2
+    assert result["refused"] == 1
+    assert len(stub_bin.calls("bd")) == 2
+
+
+def test_a_project_with_no_database_stops_after_the_first_attempt(
+    stub_bin, accepted, proj
+):
+    """`no_database` is a property of the project, not the episode, so every
+    remaining write is already known to fail. Paying for them would be a hook
+    that gets slower the more work the project has done."""
+    stub_bin.on("bd", ["update"], rc=1, stderr="no beads database found")
+
+    result = beads_write.write_episodes(proj, episodes(5), cfg=accepted)
+
+    assert len(stub_bin.calls("bd")) == 1
+    assert result["reason"] == "no_database"
+    assert result["written"] == 0
+
+
+def test_a_timeout_is_paid_once_and_not_once_per_episode(
+    stub_bin, accepted, proj
+):
+    """The rule that makes the cap safe. A write can cost
+    `beads_read.TIMEOUT_SECONDS`; the cap's worth of those would exceed the
+    `Stop` budget many times over, whatever the cap was set to."""
+    stub_bin.on("bd", ["update"], rc=124, stderr="timed out")
+
+    result = beads_write.write_episodes(proj, episodes(5), cfg=accepted)
+
+    assert len(stub_bin.calls("bd")) == 1
+    assert result["reason"] in beads_read.REASONS
+
+
+def test_a_halted_run_still_reports_what_it_managed_to_write(
+    stub_bin, accepted, proj
+):
+    """`ok` says the counts can be believed, not that every write succeeded. The
+    number written before a halt is genuinely known, and `None` would throw away
+    an observation.
+
+    `Proj-000` is the oldest close, so under the newest-first ordering it is the
+    one reached last — which also pins that the halt happens where the failure is
+    rather than at the end of the loop."""
+    stub_bin.on("bd", ["update"], rc=0)
+    stub_bin.on("bd", ["update", "Proj-000"], rc=1, stderr="no beads database found")
+
+    result = beads_write.write_episodes(proj, episodes(3), cfg=accepted)
+
+    assert result["ok"] is True
+    assert result["written"] == 2
+    assert result["reason"] == "no_database"
+
+
+# --------------------------------------------------------------------------------
+# The gate, and the empty cases
+# --------------------------------------------------------------------------------
+
+
+def test_the_whole_run_is_refused_before_consent(stub_bin, cfg, proj):
+    """Checked once for the run rather than once per episode: an unacknowledged
+    install must not run a process in the user's repository, and reporting the
+    refusal as "three episodes refused" would name the wrong problem."""
+    stub_bin.on("bd", ["update"], rc=0)
+
+    result = beads_write.write_episodes(proj, episodes(3), cfg=cfg)
+
+    assert result["ok"] is False
+    assert result["reason"] == "not_acknowledged"
+    assert stub_bin.calls() == []
+
+
+def test_disabling_metadata_writes_prevents_every_subprocess(stub_bin, cfg, proj):
+    cfg["beads"]["write_metadata"] = False
+    consent.record_acknowledgement(cfg)
+    stub_bin.on("bd", ["update"], rc=0)
+
+    result = beads_write.write_episodes(proj, episodes(3), cfg=cfg)
+
+    assert result["reason"] == "writes_disabled"
+    assert stub_bin.calls() == []
+
+
+def test_every_count_is_unknown_on_a_refused_run_and_never_zero(
+    stub_bin, cfg, proj
+):
+    result = beads_write.write_episodes(proj, episodes(3), cfg=cfg)
+
+    for key in ("episodes", "written", "refused", "capped"):
+        assert result[key] is None, key
+
+
+def test_being_offered_nothing_runs_no_command_and_is_not_a_failure(
+    stub_bin, accepted, proj
+):
+    """Zero here is an observation rather than an unknown: we were offered an
+    empty list and we know it."""
+    result = beads_write.write_episodes(proj, [], cfg=accepted)
+
+    assert result["ok"] is True
+    assert result["episodes"] == 0
+    assert result["capped"] is False
+    assert stub_bin.calls() == []
+
+
+def test_a_non_dict_in_the_list_is_dropped_rather_than_raising(
+    stub_bin, accepted, proj
+):
+    """This list comes from `reconcile`, but a hook composes the two and a hook
+    must not be the place a type error surfaces."""
+    stub_bin.on("bd", ["update"], rc=0)
+
+    result = beads_write.write_episodes(proj, [episode(), "Proj-abc", None], cfg=accepted)
+
+    assert result["ok"] is True
+    assert result["written"] == 1
+
+
+def test_nothing_at_all_offered_is_not_a_crash(stub_bin, accepted, proj):
+    result = beads_write.write_episodes(proj, None, cfg=accepted)
+
+    assert result["ok"] is True
+    assert result["episodes"] == 0

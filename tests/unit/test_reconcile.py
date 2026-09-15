@@ -744,3 +744,191 @@ def test_the_supplied_clock_reaches_the_stored_record(stub_bin, accepted, proj):
     reconcile_lib.reconcile(proj, now=at("2026-09-15T09:00:00Z"), cfg=accepted)
 
     assert ledger.episodes(proj, accepted)[0]["ts"] == "2026-09-15T09:00:00Z"
+
+
+# --------------------------------------------------------------------------
+# What moved, so the index can follow without a second read
+# --------------------------------------------------------------------------
+#
+# `reconcile` stays read-only — its docstring says so, and that property is the
+# whole reason it can hang off a `Stop` on every turn without putting a `bd`
+# write on the path. So it does not write the `hfit_*` index itself; it reports
+# which episodes moved and lets the caller compose the write.
+#
+# The alternative was for `beads_write` to re-read the ledger and diff it, which
+# would be a second read of a thing that has just been written, computing an
+# answer this function already had.
+
+
+def test_the_episodes_that_moved_are_returned_so_the_index_can_follow(
+    stub_bin, accepted, proj
+):
+    stub_bin.on("bd", ["list"], rc=0, stdout=[issue()])
+
+    result = reconcile_lib.reconcile(proj, cfg=accepted)
+
+    assert [record["issue_id"] for record in result["moved"]] == ["Proj-abc"]
+
+
+def test_an_unchanged_episode_is_not_offered_again(stub_bin, accepted, proj):
+    """The idempotence that makes running this on every `Stop` free has to reach
+    the index too. A `moved` list that repeated every episode on every run would
+    put a `bd update` per closed issue per turn on the hot path — the exact cost
+    the read/write split exists to avoid."""
+    stub_bin.on("bd", ["list"], rc=0, stdout=[issue()])
+
+    reconcile_lib.reconcile(proj, cfg=accepted)
+    again = reconcile_lib.reconcile(proj, cfg=accepted)
+
+    assert again["unchanged"] == 1
+    assert again["moved"] == []
+
+
+def test_an_updated_episode_moves_again(stub_bin, accepted, proj):
+    """A verdict stated after the close is the case that matters: the ledger
+    appends a new record, and the index has to be told, or the machine that
+    reads beads keeps the superseded verdict for ever."""
+    stub_bin.on("bd", ["list"], rc=0, stdout=[issue(close_reason="Closed")])
+    reconcile_lib.reconcile(proj, cfg=accepted)
+
+    stub_bin.reset()
+    stub_bin.on("bd", ["list"], rc=0, stdout=[issue(close_reason="accepted: it works")])
+    again = reconcile_lib.reconcile(proj, cfg=accepted)
+
+    assert again["updated"] == 1
+    assert [record["verdict"] for record in again["moved"]] == ["accepted"]
+
+
+def test_moved_is_unknown_on_a_failed_read_and_never_an_empty_list(
+    stub_bin, accepted, proj
+):
+    """`[]` would say "nothing moved", which is a claim. On a failed read nobody
+    knows whether anything moved — and a caller looping over `[]` would write
+    nothing and report success."""
+    stub_bin.on("bd", ["list"], rc=1, stderr="no beads database found")
+
+    result = reconcile_lib.reconcile(proj, cfg=accepted)
+
+    assert result["moved"] is None
+
+
+def test_a_skipped_issue_does_not_appear_in_what_moved(stub_bin, accepted, proj):
+    """An issue the ledger refused was not stored, so indexing it would publish a
+    pointer to a record that exists nowhere — and the pointer would then Dolt-sync
+    to machines with no way at all to resolve it.
+
+    The failure is forced the only way it can be: `beads_read`'s filters pre-empt
+    every other refusal, so a write failure is the one that reaches here. That makes
+    it total rather than partial, and `[]` is the whole assertion — a known empty,
+    since the writes are known to have failed.
+    """
+    os.makedirs(ledger.episodes_path(proj, accepted))  # a directory, not a file
+    stub_bin.on(
+        "bd", ["list"], rc=0, stdout=[issue(), issue(id="Proj-def")]
+    )
+
+    result = reconcile_lib.reconcile(proj, cfg=accepted)
+
+    assert result["skipped"] == 2
+    assert result["moved"] == []
+
+
+def test_what_moved_and_what_was_counted_cannot_disagree(stub_bin, accepted, proj):
+    """Two ways of saying the same thing, so they are asserted against each other:
+    a count that drifted from the list would be a report nobody could reconcile
+    against the index that was actually written."""
+    stub_bin.on(
+        "bd",
+        ["list"],
+        rc=0,
+        stdout=[issue(), issue(id="Proj-def"), issue(id="Proj-ghi")],
+    )
+
+    result = reconcile_lib.reconcile(proj, cfg=accepted)
+
+    assert len(result["moved"]) == result["new"] + result["updated"]
+
+
+def test_a_moved_record_carries_everything_the_index_needs(
+    stub_bin, accepted, proj
+):
+    """`beads_write._FROM_EPISODE` reads six fields off the record. If `moved`
+    carried the issue rather than the stored episode, the index would be built
+    from the wrong shape and would silently write nothing but the schema."""
+    stub_bin.on("bd", ["list"], rc=0, stdout=[issue()])
+
+    record = reconcile_lib.reconcile(proj, cfg=accepted)["moved"][0]
+
+    for field in (
+        "composition_digest",
+        "env_hash",
+        "model_basis",
+        "verdict",
+        "verdict_basis",
+        "capture_ok",
+    ):
+        assert field in record, field
+
+
+# --------------------------------------------------------------------------
+# The trigger predicate: was this `bd close`?
+# --------------------------------------------------------------------------
+#
+# `PostToolUse:Bash` sees every command the session runs. Reconciling on all of
+# them would put a `bd list` on the path of every shell invocation, so the hook
+# asks this first.
+
+
+def test_a_bd_close_is_recognised():
+    assert reconcile_lib.is_close_command("bd close Proj-abc") is True
+
+
+def test_a_bd_close_with_flags_before_the_subcommand_is_recognised():
+    assert reconcile_lib.is_close_command("bd close Proj-abc --reason 'accepted: x'")
+
+
+def test_another_bd_subcommand_is_not_a_close():
+    assert reconcile_lib.is_close_command("bd list --all --json") is False
+
+
+def test_a_command_that_merely_mentions_the_words_is_not_a_close():
+    """The reason this is tokenised rather than matched: `"bd close"` appears in
+    an echo, a commit message and a comment, and each would trigger a `bd list`
+    on a hook that fires for every Bash call."""
+    assert reconcile_lib.is_close_command('echo "bd close Proj-abc"') is False
+
+
+def test_a_close_after_a_chained_command_is_recognised():
+    """`&&` is how a close actually arrives — the agent runs the tests and then
+    closes. Looking only at the first token would miss every real one."""
+    assert reconcile_lib.is_close_command("pytest -q && bd close Proj-abc") is True
+
+
+def test_bd_reached_by_an_absolute_path_is_still_bd():
+    """How `bd` is spelled on a machine where it is not on `PATH`, and how a shell
+    function or an alias expands it. Comparing the whole token would read a close as
+    an unrelated command and stop recording episodes on that machine entirely —
+    silently, since nothing anywhere would say the predicate had missed."""
+    assert reconcile_lib.is_close_command("/opt/homebrew/bin/bd close Proj-abc") is True
+
+
+def test_a_command_whose_last_token_is_bd_is_not_a_close_and_does_not_raise():
+    """`which bd` and `command -v bd` are what a session runs when it is checking
+    whether beads is installed at all — and a bare `bd` is what it runs to read the
+    help. Each has no token after `bd`, so a subcommand lookup that does not stop one
+    short of the end reads past the list. That would be an IndexError rather than a
+    ValueError, so the `shlex` guard would not catch it: a hook that dies on the most
+    ordinary command there is."""
+    for command in ("which bd", "command -v bd", "bd"):
+        assert reconcile_lib.is_close_command(command) is False, command
+
+
+def test_an_unparseable_command_is_not_a_close_and_does_not_raise():
+    """`shlex` raises on an unbalanced quote, and a raised exception on a
+    `PostToolUse` is a hook that fails on a command the user typed by hand."""
+    assert reconcile_lib.is_close_command("bd close 'Proj-abc") is False
+
+
+def test_a_missing_command_is_not_a_close():
+    for value in (None, "", 0, [], {}):
+        assert reconcile_lib.is_close_command(value) is False

@@ -24,6 +24,11 @@ releases, and until then they must not appear.
 **A whitespace-bearing value silently truncates.** Measured on bd 1.1.2: `bd` takes it
 as two words and keeps the first. That is worse than an error, because nothing
 downstream can tell. So every value is rendered as one whitespace-free token.
+
+And one consequence of where this runs rather than of what it writes: a run is
+bounded, because the first reconcile of a project with a closed backlog offers every
+issue at once and this sits behind a hook with a budget. `write_episodes` documents
+the two rules that bound it.
 """
 
 import json
@@ -43,6 +48,15 @@ SCHEMA = 1
 
 # Ours, and only ours (§"The namespace boundary").
 PREFIX = "hfit_"
+
+# How many episodes one run may index. Not a config key, deliberately: this is a safety
+# bound tied to `beads_read.TIMEOUT_SECONDS` and the `Stop` hook's budget, and a bound
+# that exists to keep a timeout honest cannot be user-tunable without the timeout
+# becoming a lie. A user who raised it to 500 would turn every `Stop` into a hook killed
+# partway through, leaving exactly the partial index this exists to prevent — and since
+# `beads.max_episodes_per_run` would not be a *governing* key, doing so would not even
+# cost a re-acknowledgement to make it visible.
+MAX_EPISODES_PER_RUN = 20
 
 # The bounded vocabulary. Enforced rather than intended — see `_check`. Sorted so the
 # declaration order cannot drift from the emitted order.
@@ -137,6 +151,82 @@ def write_episode(cwd, episode, cfg=None):
     pairs["hfit_schema"] = SCHEMA
 
     return set_metadata(cwd, issue_id.strip(), pairs, cfg=cfg)
+
+
+def write_episodes(cwd, episodes, cfg=None):
+    """Index a batch of episodes, bounded so a hook cannot be killed partway through.
+
+    Returns `{"ok", "reason", "episodes", "written", "refused", "capped"}`, where
+    `episodes` is how many were *attempted* after the cap — not how many were offered,
+    which the caller already knows.
+
+    **`ok` says the counts can be believed, not that every write succeeded.** The two
+    are different failures with different remedies. A gate refusal means nothing ran and
+    nothing is known, so `ok` is `False` and every count is `None`. A failure partway
+    through means the run happened and stopped, so `ok` stays `True`, `reason` names the
+    environmental failure, and the counts are real — the number written before a halt is
+    genuinely observed, and `None` would discard it.
+
+    Two rules bound the run, and neither works without the other:
+
+    **The cap** bounds the healthy case, where a write costs tens of milliseconds and
+    twenty are nothing. Episodes past it are not written and not retried, which is a
+    known residual: a later reconcile reports them `unchanged`, so nothing offers them
+    again. `capped` is how a caller can tell.
+
+    **Halting on an environmental failure** bounds the pathological one. The cap alone
+    does not: `MAX_EPISODES_PER_RUN` timeouts at `beads_read.TIMEOUT_SECONDS` each would
+    exceed a `Stop` budget by an order of magnitude however small the cap was. Every
+    reason in `beads_read.REASONS` is a property of the *project* — no database, no `bd`,
+    a hung one — so every remaining write is already known to fail. A per-episode
+    refusal (`no_issue_id`, `nothing_to_write`) is a property of one record and does not
+    halt, or a single malformed row arriving over Dolt sync would stop a project's index
+    from ever updating again.
+    """
+    cfg = hfit_config.load() if cfg is None else cfg
+    offered = [record for record in (episodes or []) if isinstance(record, dict)]
+
+    # Once for the run, not once per episode. Before any subprocess (ADR-014), and
+    # reported as one refusal because "three episodes refused" would name the wrong
+    # problem.
+    allowed, reason = consent.require_consent(cfg)
+    if not allowed:
+        return _plural_refusal(reason)
+
+    beads = cfg.get("beads")
+    if not (beads if isinstance(beads, dict) else {}).get("write_metadata"):
+        return _plural_refusal("writes_disabled")
+
+    # Two stable sorts rather than one compound key: newest close first, ties broken by
+    # id so the same batch always yields the same run. ISO-8601 `Z` strings sort
+    # chronologically as text, which is why `closed_at` needs no parsing here.
+    ordered = sorted(offered, key=lambda record: _text(record.get("issue_id")))
+    ordered.sort(key=lambda record: _text(record.get("closed_at")), reverse=True)
+
+    capped = len(ordered) > MAX_EPISODES_PER_RUN
+    ordered = ordered[:MAX_EPISODES_PER_RUN]
+
+    written = 0
+    refused = 0
+    halt = None
+    for record in ordered:
+        outcome = write_episode(cwd, record, cfg=cfg)
+        if outcome["ok"]:
+            written += 1
+            continue
+        refused += 1
+        if outcome["reason"] in beads_read.REASONS:
+            halt = outcome["reason"]
+            break
+
+    return {
+        "ok": True,
+        "reason": halt,
+        "episodes": len(ordered),
+        "written": written,
+        "refused": refused,
+        "capped": capped,
+    }
 
 
 def set_metadata(cwd, issue_id, pairs, cfg=None):
@@ -271,6 +361,30 @@ def _run(args, cwd):
     return None
 
 
+def _text(value):
+    """A sort key that cannot raise. A missing `closed_at` or id sorts to one end
+    rather than making the batch untotally-ordered, which in Python 3 is a TypeError
+    and in a hook is a plugin that stopped working."""
+    return value if isinstance(value, str) else ""
+
+
 def _refusal(reason):
     """Nothing written, and the count unknown rather than zero."""
     return {"ok": False, "reason": reason, "keys_written": None}
+
+
+def _plural_refusal(reason):
+    """The run did not happen, so none of its counts are known.
+
+    `capped` is `None` too, and that is the one worth stating: `False` would be the
+    reading a caller wants — "nothing was dropped" — and it would be a claim about a
+    run that never took place.
+    """
+    return {
+        "ok": False,
+        "reason": reason,
+        "episodes": None,
+        "written": None,
+        "refused": None,
+        "capped": None,
+    }

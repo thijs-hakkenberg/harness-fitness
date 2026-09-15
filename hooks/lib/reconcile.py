@@ -32,9 +32,12 @@ every count is `None` on a failed read.
 
 Reads only. Writing the `hfit_*` pointer keys back to beads is a separate module, so
 that this can run on a `Stop` without putting a `bd` write on the path of every turn.
+What it does instead is report which episodes *moved*, so the caller can compose the
+write without re-reading and diffing a ledger that was just written.
 """
 
 import os
+import shlex
 
 import beads_read
 import consent
@@ -55,6 +58,12 @@ REFUSALS = ("not_acknowledged", "config_changed") + beads_read.REASONS
 
 _COUNTS = ("new", "updated", "unchanged", "skipped")
 
+# Which ledger outcomes count as movement worth indexing. `unchanged` is deliberately
+# absent: the ledger appended nothing, so beads already holds what this run would
+# write, and offering it again would put one `bd update` per closed issue on every
+# turn — the cost the read/write split exists to avoid.
+_MOVED = ("new", "updated")
+
 # There is no `isinstance(issue, dict)` guard in the loop below, and that is a
 # decision rather than an omission. `beads_read.list_issues` already drops every
 # record that is not a dict carrying an id, so a guard here could not be reached by
@@ -72,10 +81,16 @@ def reconcile(cwd, now=None, cfg=None):
     anything else — an ISO string passed here would store `ts: null` on every episode
     and nothing would fail.
 
-    Returns `{"ok", "reason", "episodes", "new", "updated", "unchanged", "skipped"}`.
-    Counts are `None` rather than absent on a refusal: this is a library, and
+    Returns `{"ok", "reason", "episodes", "new", "updated", "unchanged", "skipped",
+    "moved"}`. Counts are `None` rather than absent on a refusal: this is a library, and
     `dict.get()` cannot tell an absent key from a null one in process. They are never
-    `0`, because zero is an answer.
+    `0`, because zero is an answer. `moved` follows the same rule and is `None` rather
+    than `[]` — a caller looping over `[]` would write nothing and report success.
+
+    `moved` holds the episode records the ledger actually stored, for the episodes
+    whose record moved. A caller hands them to `beads_write.write_episodes`; an
+    unchanged episode is absent, which is what keeps a per-turn trigger from putting a
+    `bd update` per closed issue on the hot path.
     """
     cfg = hfit_config.load() if cfg is None else cfg
 
@@ -96,27 +111,62 @@ def reconcile(cwd, now=None, cfg=None):
     home = os.path.expanduser("~")
 
     counts = dict((key, 0) for key in _COUNTS)
+    moved = []
     for issue in read["issues"] or []:
         outcome = ledger.record_episode(
             cwd, _episode(home, cwd, issue, digest), cfg=cfg, now=now
         )
         if outcome["ok"]:
             counts[outcome["status"]] += 1
+            if outcome["status"] in _MOVED:
+                # The stored record, not the issue and not the record we offered:
+                # the ledger stamps fields onto it, and an index built from the
+                # wrong shape would write nothing but the schema and say it worked.
+                moved.append(outcome["record"])
         else:
+            # Not stored, so not indexed. Publishing a pointer to a record that
+            # exists nowhere is worse than not publishing one.
             counts["skipped"] += 1
 
     result = {
         "ok": True,
         "reason": None,
         "episodes": counts["new"] + counts["updated"] + counts["unchanged"],
+        "moved": moved,
     }
     result.update(counts)
     return result
 
 
+def is_close_command(command):
+    """Did this Bash command close a beads issue?
+
+    Tokenised with `shlex`, never matched as text. `PostToolUse:Bash` sees every
+    command a session runs, and the string `bd close` appears in an echo, a commit
+    message and a comment — each of which would otherwise put a `bd list` on the path
+    of a shell call that changed nothing.
+
+    Tokenising also gets the two shapes a real close arrives in for free: flags after
+    the subcommand, and a close chained behind the tests that justified it.
+
+    Never raises. `shlex` raises on an unbalanced quote, and a hand-typed command with
+    one is not a reason for a hook to fail.
+    """
+    if not isinstance(command, str) or not command.strip():
+        return False
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return False
+    for index, token in enumerate(tokens[:-1]):
+        if os.path.basename(token) == beads_read.BD and tokens[index + 1] == "close":
+            return True
+    return False
+
+
 def _refusal(reason):
     """No counts, because none of them are known. Unknown is never zero."""
-    result = {"ok": False, "reason": reason, "episodes": None}
+    result = {"ok": False, "reason": reason, "episodes": None, "moved": None}
     result.update(dict((key, None) for key in _COUNTS))
     return result
 
